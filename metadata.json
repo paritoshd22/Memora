@@ -1,0 +1,6 @@
+{
+  "name": "MEMORA — Your Personal Museum",
+  "description": "Explore your life through an immersive personal museum of photographs, videos, stories and memories.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

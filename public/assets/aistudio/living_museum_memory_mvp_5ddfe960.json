@@ -1,0 +1,268 @@
+{
+  "name": "The Living Museum - Photo Memory MVP",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "living-museum-memory",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Memory Upload Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "living-museum-memory"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? $json;\nconst required = ['user_id', 'image_base64', 'mime_type'];\nconst missing = required.filter(k => !input[k]);\nif (missing.length) throw new Error('Missing required fields: ' + missing.join(', '));\nif (!['image/jpeg','image/png','image/webp'].includes(input.mime_type)) throw new Error('Unsupported mime_type. Use image/jpeg, image/png, or image/webp.');\nconst base64 = String(input.image_base64).replace(/^data:image\\/[a-zA-Z0-9.+-]+;base64,/, '');\nif (!/^[A-Za-z0-9+/=\\r\\n]+$/.test(base64)) throw new Error('image_base64 is not valid base64.');\nconst approxBytes = Math.floor(base64.replace(/\\s/g,'').length * 3 / 4);\nif (approxBytes > 8 * 1024 * 1024) throw new Error('Image exceeds 8 MB prototype limit.');\nconst memoryId = 'mem_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);\nreturn [{ json: { user_id: String(input.user_id), memory_id: memoryId, mime_type: input.mime_type, image_base64: base64.replace(/\\s/g,''), user_note: input.user_note ?? '', selected_collection: input.selected_collection ?? null, created_at: new Date().toISOString(), file_url: input.file_url ?? null } }];"
+      },
+      "id": "2",
+      "name": "Validate and Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "REPLACE_WITH_GEMINI_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({contents:[{parts:[{text:'Analyze this image for The Living Museum. Describe only visible details. Do not identify people or guess identities, location, date, relationships, or event. If unknown, say null. Return JSON only with keys: description (string), objects (array of strings), activities (array of strings), scene (string), visual_tags (array of strings), confidence (number 0 to 1), unknowns (array of strings). User note, which is unverified context: ' + $json.user_note},{inline_data:{mime_type:$json.mime_type,data:$json.image_base64}}]}],generationConfig:{responseMimeType:'application/json'}}) }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "3",
+      "name": "Gemini Visual Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer REPLACE_WITH_OPENAI_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},messages:[{role:'system',content:'You are the Memory Organisation agent for The Living Museum. Use only the supplied visual analysis and user note. Do not infer identities, dates, locations, relationships, or events. Suggest one collection from Family, Friends, Childhood, College, Travel, Festivals, Nature, Everyday Life, Other. Return JSON only with keys: suggested_collection, collection_reason, related_memory_search_terms (array), collection_confidence (number 0 to 1), caption (string), short_story (string), needs_review (boolean). Mark uncertain facts as unknown and do not invent personal history.'},{role:'user',content:JSON.stringify({user_note:$('Validate and Normalize').item.json.user_note,selected_collection:$('Validate and Normalize').item.json.selected_collection,visual_analysis:$json.candidates[0].content.parts[0].text})}]}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "4",
+      "name": "OpenAI Organise and Caption",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        710,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Validate and Normalize').item.json;\nconst geminiRaw = $('Gemini Visual Analysis').item.json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';\nconst openaiText = $json?.choices?.[0]?.message?.content ?? '{}';\nfunction parseObject(s, label) { try { const v = typeof s === 'string' ? JSON.parse(s) : s; if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not object'); return v; } catch (e) { throw new Error(label + ' returned invalid JSON: ' + e.message); } }\nconst visual = parseObject(geminiRaw, 'Gemini');\nconst organised = parseObject(openaiText, 'OpenAI');\nconst allowed = ['Family','Friends','Childhood','College','Travel','Festivals','Nature','Everyday Life','Other'];\nconst collection = allowed.includes(organised.suggested_collection) ? organised.suggested_collection : 'Other';\nconst confidence = Number(organised.collection_confidence ?? visual.confidence ?? 0);\nconst result = {\n  memory_id: base.memory_id,\n  user_id: base.user_id,\n  media_type: 'image',\n  file_url: base.file_url,\n  description: String(visual.description ?? ''),\n  timestamp: null,\n  location: { name: null, latitude: null, longitude: null, confirmed: false },\n  tags: Array.isArray(visual.visual_tags) ? visual.visual_tags : [],\n  visible_objects: Array.isArray(visual.objects) ? visual.objects : [],\n  activities: Array.isArray(visual.activities) ? visual.activities : [],\n  suggested_collection: collection,\n  collection_reason: String(organised.collection_reason ?? ''),\n  caption: String(organised.caption ?? ''),\n  short_story: String(organised.short_story ?? ''),\n  confidence: Math.max(0, Math.min(1, Number.isFinite(confidence) ? confidence : 0)),\n  needs_review: Boolean(organised.needs_review ?? true) || !base.file_url,\n  user_approved: false,\n  user_note: base.user_note,\n  created_at: base.created_at,\n  visual_analysis: visual,\n  related_memory_search_terms: Array.isArray(organised.related_memory_search_terms) ? organised.related_memory_search_terms : [],\n  processing_status: 'processed'\n};\nreturn [{json: result}];"
+      },
+      "id": "5",
+      "name": "Validate and Build Memory JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL + '/rest/v1/memories' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({memory_id:$json.memory_id,user_id:$json.user_id,media_type:$json.media_type,file_url:$json.file_url,description:$json.description,timestamp:$json.timestamp,location:$json.location,tags:$json.tags,visible_objects:$json.visible_objects,activities:$json.activities,suggested_collection:$json.suggested_collection,collection_reason:$json.collection_reason,caption:$json.caption,short_story:$json.short_story,confidence:$json.confidence,needs_review:$json.needs_review,user_approved:$json.user_approved,user_note:$json.user_note,visual_analysis:$json.visual_analysis,related_memory_search_terms:$json.related_memory_search_terms,processing_status:$json.processing_status}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "6",
+      "name": "Save Memory to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, memory_id: $('Validate and Build Memory JSON').item.json.memory_id, processing_status: 'processed', memory: $('Validate and Build Memory JSON').item.json, storage: 'metadata_saved' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "7",
+      "name": "Return Memory Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1450,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Memory Upload Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate and Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Normalize": {
+      "main": [
+        [
+          {
+            "node": "Gemini Visual Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Visual Analysis": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Organise and Caption",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Organise and Caption": {
+      "main": [
+        [
+          {
+            "node": "Validate and Build Memory JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Build Memory JSON": {
+      "main": [
+        [
+          {
+            "node": "Save Memory to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Memory to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Return Memory Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "living-museum-mvp-1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
