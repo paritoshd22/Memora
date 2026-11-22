@@ -5281,7 +5281,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         centerpieceGroup.visible = true;
         atriumMotesPoints.visible =
           !isSoftwareGl &&
-          qualityConfig.profileId !== 'desktop_performance' &&
+          !qualityConfig.profileId?.startsWith('desktop_') &&
           qualityConfig.profileId !== 'mobile_performance';
         liftCabinGroup.visible = true;
         return;
@@ -6709,9 +6709,11 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       }
       renderer.shadowMap.needsUpdate = qualityConfig.enableShadows;
       shadowDirtyFrames = 2;
+      // Performance Patch V1: keep animated ambient particles off on desktop.
+      // They remain available in source and can be re-enabled after profiling.
       const showMotes =
         !isSoftwareGl &&
-        qualityConfig.profileId !== 'desktop_performance' &&
+        !qualityConfig.profileId?.startsWith('desktop_') &&
         qualityConfig.profileId !== 'mobile_performance';
       atriumMotesPoints.visible = showMotes && !activeRoomIdRef.current;
       torsoMesh.castShadow = qualityConfig.enableShadows;
@@ -6739,9 +6741,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
 
     if (
       isSoftwareGl ||
-      qualityConfig.profileId === 'desktop_performance' ||
+      qualityConfig.profileId?.startsWith('desktop_') ||
       qualityConfig.profileId === 'mobile_performance'
     ) {
+      // Performance Patch V1: disable animated dust/motes for all desktop profiles.
       atriumMotesPoints.visible = false;
     }
 

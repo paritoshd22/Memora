@@ -1,6 +1,9 @@
 import { ArtworkMotif } from '../types/museum';
 
+// Bounded LRU cache: procedural artwork data URLs can otherwise accumulate
+// indefinitely as users browse rooms with many distinct memories.
 const artCache = new Map<string, string>();
+const MAX_PROCEDURAL_ART_CACHE_ENTRIES = 48;
 
 /**
  * Generates a high-resolution, museum-grade procedural canvas painting data URL
@@ -16,7 +19,12 @@ export function getProceduralMemoryArt(
 ): string {
   const cacheKey = `${motif}_${palette.join('_')}_${title}`;
   const cached = artCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // Refresh insertion order so frequently used artwork stays in the cache.
+    artCache.delete(cacheKey);
+    artCache.set(cacheKey, cached);
+    return cached;
+  }
 
   if (typeof document === 'undefined') return '';
 
@@ -128,6 +136,11 @@ export function getProceduralMemoryArt(
 
   const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
   artCache.set(cacheKey, dataUrl);
+  while (artCache.size > MAX_PROCEDURAL_ART_CACHE_ENTRIES) {
+    const oldestKey = artCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    artCache.delete(oldestKey);
+  }
   return dataUrl;
 }
 
