@@ -36,3 +36,8 @@ These systems were preserved rather than replaced.
 ## Validation status
 
 A full build/test could not be completed in this environment because project dependencies were not installed and package installation timed out. A TypeScript check was attempted, but it stopped because the `vite/client` type package was unavailable. Please run `npm install`, then `npm run lint`, `npm test`, and `npm run build` in Google AI Studio or a local Node environment before deployment.
+
+---
+
+## Childhood Bedroom interaction prompt
+- Added `public/assets/aistudio/AI_STUDIO_PROMPT_CHILDHOOD_BEDROOM_INTERACTIONS.md` (paste into AI Studio) and `CHILDHOOD_BEDROOM_BRIEF_SPEC.md` (full spec). The prompt forbids visual changes to existing assets, cancels the spec's "Stage 2" restyle, requires baseline-vs-final screenshots, and maps the spec onto the existing interaction system.
