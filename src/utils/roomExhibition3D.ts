@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildChildhoodParkEnvironment } from './childhoodParkEnvironment';
 import {
   Collection,
   ExhibitionDisplayStyle,
@@ -785,6 +786,8 @@ export function buildExhibitionRoom3DScene(params: {
   const roomH = ROOM_INTERIOR_SPEC.height;
   const halfW = ROOM_INTERIOR_SPEC.halfWidth;
   const halfD = ROOM_INTERIOR_SPEC.halfDepth;
+  const isChildhoodPark = categoryDetection.categoryKey === 'childhood';
+  const architectureShellStartIndex = rootGroup.children.length;
 
   // =========================================================================
   // 1. ARCHITECTURAL SHELL: WARM PARQUET / MARBLE FLOOR, BRASS INLAYS, WALLS & CEILING
@@ -1711,6 +1714,37 @@ export function buildExhibitionRoom3DScene(params: {
     cycWall.position.set(0, 2.35, -1.2);
     rootGroup.add(cycWall);
     cameraObstacleMeshes.push(cycWall);
+  }
+
+  // Only the Childhood category becomes an open-air park. Other categories keep
+  // the original museum architecture and render order completely unchanged.
+  if (isChildhoodPark) {
+    const architectureShellChildren = rootGroup.children.slice(architectureShellStartIndex);
+    const roomArchitectureGroup = new THREE.Group();
+    roomArchitectureGroup.name = `room_architecture_shell_${room.id}`;
+    architectureShellChildren.forEach((child) => {
+      rootGroup.remove(child);
+      if (child !== exitArchHitbox) roomArchitectureGroup.add(child);
+      else rootGroup.add(child);
+    });
+    roomArchitectureGroup.visible = false;
+    rootGroup.add(roomArchitectureGroup);
+
+    // Hidden gallery walls must not continue blocking the park camera.
+    const hiddenShellObjects = new Set(architectureShellChildren);
+    for (let i = solidWallMeshes.length - 1; i >= 0; i--) {
+      if (hiddenShellObjects.has(solidWallMeshes[i])) solidWallMeshes.splice(i, 1);
+    }
+    for (let i = cameraObstacleMeshes.length - 1; i >= 0; i--) {
+      if (hiddenShellObjects.has(cameraObstacleMeshes[i])) cameraObstacleMeshes.splice(i, 1);
+    }
+
+    buildChildhoodParkEnvironment({
+      root: rootGroup,
+      track,
+      cameraObstacleMeshes,
+      enableShadows: qualityConfig.enableShadows,
+    });
   }
 
   // Animated groups for smooth render-loop ambient motion

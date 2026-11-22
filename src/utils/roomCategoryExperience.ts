@@ -63,8 +63,8 @@ export const ROOM_CATEGORY_EXPERIENCE_PROFILES: Record<
     key: 'childhood',
     label: 'Childhood & Early Wonder',
     shortBadge: 'Childhood Wonder',
-    subtitle: 'A Bedroom, Backyard, Treehouse & Playful Discoveries',
-    themeName: 'A Lived-In Childhood Home, Garden & Treehouse World',
+    subtitle: 'A Sunlit Memory Park of Play Trails, Treehouse & Firsts',
+    themeName: 'Sunlit Childhood Memory Park — Garden Trails, Play Grove & Treehouse',
     wallColorHex: '#FDF4E3',
     floorTintHex: '#EEDCC1',
     archColorHex: '#D8B589',
@@ -80,15 +80,17 @@ export const ROOM_CATEGORY_EXPERIENCE_PROFILES: Record<
     curatorQuote:
       'In the quiet corners of childhood, every afternoon felt infinite and every small object held a universe.',
     roomDescription:
-      'A believable, explorable childhood world: a warm lived-in bedroom opening into a sunlit backyard with a large tree, wooden treehouse, tyre swing, bicycle, garden path, and playful outdoor area. The bedroom includes a real bed, teddy bear, books, study desk, toys, and a television for original uploaded videos. Personal memories are connected contextually to relevant places and objects rather than presented as a wall of exhibits.',
+      'An open-air, explorable Childhood Memory Park designed as a connected 3D world. Enter through a timber garden arbor onto a winding gravel memory trail, surrounded by soft meadow grass, flower beds, mature trees and warm late-afternoon light. The park includes a wooden treehouse and tyre swing, a first-bicycle trail, hopscotch and cricket play court, a small reflection pond with a timber bench, and a freestanding memory trellis. Keep a small home-and-play nook at the edge for bedroom keepsakes, storybooks and original childhood objects. Place original user memories contextually at the activities and places they belong to instead of presenting the experience as a conventional gallery.',
     curatorRationale:
-      'The Childhood category should feel like stepping into a recreated childhood environment. Build connected lived-in spaces and meaningful activities first; use original photographs, videos, chats, and stories as contextual memory links inside the world. Clearly distinguish user memories from AI-generated interpretations.',
+      'The Childhood category should feel like entering a personal childhood park that can be explored like a gentle 3D memory experience. Prioritise a clear entrance, winding memory trail, garden landmarks, treehouse, swing, bicycle and play court. Keep a small home keepsake nook as a secondary destination. Use original photographs, videos, chats and stories as contextual memory links at the relevant places; never fabricate personal events or replace authentic media with AI-generated substitutes.',
     interactive3DInstallations: [
-      'Walkable Childhood Bedroom with Bed, Teddy Bear, Wardrobe and Study Desk',
-      'Sunlit Backyard with Treehouse, Ladder, Tyre Swing and Bicycle',
-      'Interactive Play Area with Hopscotch, Toy Train, Blocks and Cricket Set',
-      'Cosy Hideaway with Cushions, Storybooks and Warm Fairy Lights',
-      'Original Memory Playback Points Connected to Relevant Objects',
+      'Open-Air Childhood Memory Park with Timber Entry Arbor and Winding Gravel Memory Trail',
+      'Meadow Garden with Mature Trees, Flower Beds, Stepping Stones, Reflection Pond and Timber Bench',
+      'Wooden Treehouse Grove with Climbable Ladder, Tyre Swing and Friendship Keepsakes',
+      'First Bicycle Trail with Contextual Riding Memories and Milestone Displays',
+      'Play Court with Hopscotch, Toy Train, Wooden Blocks and Cricket Set',
+      'Freestanding Memory Trellis and Original Photo, Video, Audio and Story Playback Points',
+      'Small Home Keepsake Nook with Storybooks, Teddy Bear and Childhood Objects',
     ],
     detectionKeywords: [
       'childhood',

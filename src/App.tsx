@@ -1005,9 +1005,24 @@ export default function App() {
   // 2. Navigation, 3D Explorer Character, Character Welcome & Onboarding States
   const [activeNav, setActiveNav] = useState<ActiveNavTab>('home');
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+  const [roomEntryTransition, setRoomEntryTransition] = useState(false);
+  const roomEntryActivateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const roomEntryHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isRoomCatalogueOpen, setIsRoomCatalogueOpen] =
     useState<boolean>(false);
   const [hasEnteredAtrium, setHasEnteredAtrium] = useState<boolean>(true);
+
+  // Keep the entry transition timers scoped to the application lifecycle.
+  useEffect(() => {
+    return () => {
+      if (roomEntryActivateTimerRef.current) {
+        clearTimeout(roomEntryActivateTimerRef.current);
+      }
+      if (roomEntryHideTimerRef.current) {
+        clearTimeout(roomEntryHideTimerRef.current);
+      }
+    };
+  }, []);
   const [characterWelcomeActive, setCharacterWelcomeActive] =
     useState<boolean>(false);
 
@@ -1320,6 +1335,15 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    if (roomEntryActivateTimerRef.current) {
+      clearTimeout(roomEntryActivateTimerRef.current);
+      roomEntryActivateTimerRef.current = null;
+    }
+    if (roomEntryHideTimerRef.current) {
+      clearTimeout(roomEntryHideTimerRef.current);
+      roomEntryHideTimerRef.current = null;
+    }
+    setRoomEntryTransition(false);
     const tokenToRevoke = sessionToken;
     // 1. Immediately clear all private in-memory state so no subsequent user or guest can see previous memories
     setMemories([]);
@@ -1457,24 +1481,55 @@ export default function App() {
       const targetId = roomId === 'childhood' ? 'childhood' : 'childhood';
       const targetRoom = rooms.find((r) => r.id === targetId);
       if (!targetRoom) return;
+
+      if (roomEntryActivateTimerRef.current) {
+        clearTimeout(roomEntryActivateTimerRef.current);
+      }
+      if (roomEntryHideTimerRef.current) {
+        clearTimeout(roomEntryHideTimerRef.current);
+      }
+
       if (targetRoom.status !== 'active') {
         handleActivateChildhoodRoom();
       }
+
       setHasEnteredAtrium(true);
       setActiveNav('home');
       setIsRoomCatalogueOpen(false);
-      // Enter the room as a clean, immersive 3D experience.
       setIsMusicPlayerOpen(false);
       setShowControlsGuide(false);
       setShowProfileMenu(false);
       setActiveNotification(null);
-      setActiveRoomId('childhood');
       setNewlyCreatedRoom(null);
+
+      // Keep the atrium visible briefly while the doorway/portal transition plays.
+      // The park scene mounts underneath the transition after the short door-flash beat.
+      setRoomEntryTransition(true);
+      setActiveRoomId(null);
+
+      roomEntryActivateTimerRef.current = setTimeout(() => {
+        setActiveRoomId('childhood');
+        roomEntryActivateTimerRef.current = null;
+      }, 520);
+
+      roomEntryHideTimerRef.current = setTimeout(() => {
+        setRoomEntryTransition(false);
+        roomEntryHideTimerRef.current = null;
+      }, 2050);
     },
     [rooms, handleActivateChildhoodRoom],
   );
 
   const handleBackToAtrium = useCallback(() => {
+    if (roomEntryActivateTimerRef.current) {
+      clearTimeout(roomEntryActivateTimerRef.current);
+      roomEntryActivateTimerRef.current = null;
+    }
+    if (roomEntryHideTimerRef.current) {
+      clearTimeout(roomEntryHideTimerRef.current);
+      roomEntryHideTimerRef.current = null;
+    }
+    setRoomEntryTransition(false);
     setIsRoomCatalogueOpen(false);
     setActiveRoomId(null);
     setActiveNav('home');
@@ -3085,6 +3140,129 @@ export default function App() {
         onRequestResetMuseum={() => setIsResetConfirmOpen(true)}
         onSignOut={handleSignOut}
       />
+
+      {roomEntryTransition && (
+        <div
+          className="memora-room-entry-transition"
+          role="status"
+          aria-live="polite"
+          aria-label="Entering Childhood Memory Park"
+        >
+          <style>{`
+            @keyframes memora-entry-wash {
+              0% { opacity: 0; }
+              16% { opacity: 1; }
+              72% { opacity: 1; }
+              100% { opacity: 0; }
+            }
+            @keyframes memora-entry-door-left {
+              0% { transform: translateX(0) scaleX(1); }
+              36% { transform: translateX(-2.5vw) scaleX(.94); }
+              100% { transform: translateX(-105%) scaleX(.88); }
+            }
+            @keyframes memora-entry-door-right {
+              0% { transform: translateX(0) scaleX(1); }
+              36% { transform: translateX(2.5vw) scaleX(.94); }
+              100% { transform: translateX(105%) scaleX(.88); }
+            }
+            @keyframes memora-entry-light {
+              0% { transform: scaleX(.08); opacity: 0; }
+              28% { transform: scaleX(.35); opacity: .65; }
+              58% { transform: scaleX(1); opacity: 1; }
+              100% { transform: scaleX(1.5); opacity: 0; }
+            }
+            @keyframes memora-entry-copy {
+              0%, 22% { opacity: 0; transform: translateY(12px); }
+              42%, 78% { opacity: 1; transform: translateY(0); }
+              100% { opacity: 0; transform: translateY(-5px); }
+            }
+            .memora-room-entry-transition {
+              position: fixed;
+              inset: 0;
+              z-index: 120;
+              display: grid;
+              place-items: center;
+              overflow: hidden;
+              pointer-events: none;
+              background: radial-gradient(ellipse at center, rgba(255,246,222,.98) 0%, rgba(229,205,163,.96) 46%, rgba(55,47,38,.98) 100%);
+              animation: memora-entry-wash 2.05s ease-in-out both;
+            }
+            .memora-entry-door {
+              position: absolute;
+              top: 0;
+              bottom: 0;
+              width: 50.5%;
+              background:
+                linear-gradient(90deg, rgba(38,29,22,.22), transparent 18%, transparent 82%, rgba(38,29,22,.18)),
+                repeating-linear-gradient(90deg, #6d5037 0px, #795b3e 34px, #684a33 68px, #806044 102px);
+              box-shadow: inset 0 0 45px rgba(24,17,12,.32);
+              will-change: transform;
+            }
+            .memora-entry-door-left {
+              left: 0;
+              transform-origin: left center;
+              animation: memora-entry-door-left 1.18s cubic-bezier(.7,0,.2,1) both;
+            }
+            .memora-entry-door-right {
+              right: 0;
+              transform-origin: right center;
+              animation: memora-entry-door-right 1.18s cubic-bezier(.7,0,.2,1) both;
+            }
+            .memora-entry-light {
+              position: absolute;
+              inset: 0 auto 0 50%;
+              width: min(44vw, 620px);
+              transform: translateX(-50%) scaleX(.08);
+              transform-origin: center;
+              background: linear-gradient(90deg, transparent, rgba(255,251,232,.98) 35%, #fffdf4 50%, rgba(255,239,195,.9) 65%, transparent);
+              filter: blur(22px);
+              animation: memora-entry-light 1.45s .12s ease-out both;
+            }
+            .memora-entry-copy {
+              position: relative;
+              z-index: 2;
+              text-align: center;
+              color: #493724;
+              padding: 24px;
+              animation: memora-entry-copy 2.05s ease both;
+            }
+            .memora-entry-kicker {
+              font: 600 10px/1.2 ui-sans-serif, system-ui, sans-serif;
+              letter-spacing: .32em;
+              text-transform: uppercase;
+              color: #98734a;
+              margin-bottom: 14px;
+            }
+            .memora-entry-title {
+              font: 500 clamp(30px, 5vw, 58px)/1.05 Georgia, 'Times New Roman', serif;
+              letter-spacing: -.035em;
+              text-shadow: 0 2px 24px rgba(255,255,255,.5);
+            }
+            .memora-entry-subtitle {
+              margin-top: 12px;
+              font: 500 11px/1.5 ui-sans-serif, system-ui, sans-serif;
+              letter-spacing: .18em;
+              text-transform: uppercase;
+              color: #866b4e;
+            }
+            @media (prefers-reduced-motion: reduce) {
+              .memora-room-entry-transition, .memora-entry-door-left,
+              .memora-entry-door-right, .memora-entry-light, .memora-entry-copy {
+                animation-duration: .01ms !important;
+                animation-delay: 0ms !important;
+              }
+            }
+          `}</style>
+          <div className="memora-entry-door memora-entry-door-left" />
+          <div className="memora-entry-door memora-entry-door-right" />
+          <div className="memora-entry-light" />
+          <div className="memora-entry-copy">
+            <div className="memora-entry-kicker">A doorway to your memories</div>
+            <div className="memora-entry-title">Childhood Memory Park</div>
+            <div className="memora-entry-subtitle">Opening your world of wonder</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

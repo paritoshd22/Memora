@@ -167,9 +167,9 @@ export const INITIAL_ROOMS: Room[] = [
     status: 'active',
     enabled: true,
     name: 'Childhood',
-    subtitle: 'Sunlit Meadows & Early Wonder',
+    subtitle: 'Childhood Memory Park · Play, Wonder & Firsts',
     description:
-      'Hand-built cedar treehouses, bicycles leaning against warm stone walls, and long summer afternoons that felt endless.',
+      'An open-air childhood memory park with winding garden paths, a wooden treehouse, tyre swing, first-bicycle trail, playful courts, flower meadows and places to rediscover the little moments that made growing up feel magical.',
     theme: 'Warm Cedar & Sunlit Meadow',
     accentColor: '#D6A15D',
     lightColor: 0xffb85c,
