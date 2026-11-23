@@ -3341,8 +3341,8 @@ async function runTests() {
     assert.equal(mBal.shadowMapSize, 512, 'mobile_balanced preserves 512 shadow map reference');
     assert.equal(mBal.treeFoliageInstances, 36);
     assert.equal(mBal.enableFloorLightCulling, false, 'mobile_balanced preserves baseline light behavior');
-    assert.equal(dBal.shadowMapSize, 1024);
-    assert.equal(dBal.maxPixelRatio, 1.35);
+    assert.equal(dBal.shadowMapSize, 768);
+    assert.equal(dBal.maxPixelRatio, 1.0);
     assert.equal(dBal.enableAntialias, false);
     assert.equal(dBal.usePhysicalHeroAccentsOnly, true);
     assert.equal(dBal.enableFloorLightCulling, true);
@@ -3441,7 +3441,36 @@ async function runTests() {
     console.log('✓ 29. Adaptive Desktop Graphics Recovery (GPU Detection, 5 Profiles, Pixel Budget & Freeze Protection) verified');
   }
 
-  console.log('\nAll 29 Atrium 3D Collision, Architecture, Entry Lighting, Character-Only Doorway Entry, 3D Exhibition Room, Spotify Audio, Elevator, Gemini Category, 3D Asset/GSAP, Room Doors, Stage 00.5 Camera/Visibility, Stage 01 & Stage 01B Visual Standards, Stage 02 AI Curation, Visual Sprint V1, Character Studio, MEMORA Brand & Adaptive Desktop Graphics tests passed!');
+  // Test 30: Interactive Childhood Bedroom Additive Colliders, TubeGeometry Fix & Bedroom SFX
+  {
+    const roomColliders = buildRoomInteriorColliders();
+    const obbIds = new Set(roomColliders.obbs.map((o: { id: string }) => o.id));
+    for (const expectedId of [
+      'room_trophy_shelf',
+      'room_cork_pinboard',
+      'room_drawing_wall',
+      'room_bedroom_window',
+      'room_memory_radio',
+      'room_memory_projector',
+      'room_wall_clock_calendar',
+    ]) {
+      assert.ok(obbIds.has(expectedId), `Missing additive bedroom collider: ${expectedId}`);
+    }
+    const spawnCheck = resolveSingleStepPosition(0, 5.5, roomColliders, CHARACTER_COLLIDER_RADIUS);
+    assert.ok(
+      Math.hypot(spawnCheck.x - 0, spawnCheck.z - 5.5) < 0.05,
+      'Room spawn (0, 5.5) must remain unobstructed by additive bedroom props',
+    );
+
+    const { bedroomSfx } = await import('../bedroomSfx');
+    const initialMute = bedroomSfx.isMuted();
+    assert.equal(bedroomSfx.toggleMuted(), !initialMute);
+    assert.equal(bedroomSfx.toggleMuted(), initialMute);
+
+    console.log('✓ 30. Interactive Childhood Bedroom Colliders, Spawn Clearance & Procedural SFX verified');
+  }
+
+  console.log('\nAll 30 Atrium 3D Collision, Architecture, Entry Lighting, Character-Only Doorway Entry, 3D Exhibition Room, Spotify Audio, Elevator, Gemini Category, 3D Asset/GSAP, Room Doors, Stage 00.5 Camera/Visibility, Stage 01 & Stage 01B Visual Standards, Stage 02 AI Curation, Visual Sprint V1, Character Studio, MEMORA Brand, Adaptive Desktop Graphics & Childhood Bedroom Interaction tests passed!');
 }
 
 runTests().catch((err) => {

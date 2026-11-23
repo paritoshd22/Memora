@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { buildChildhoodParkEnvironment } from './childhoodParkEnvironment';
 import {
+  attachChildhoodBedroomInteractions,
+  ChildhoodBedroomInteractionController,
+} from './childhoodBedroomInteractions';
+import {
   Collection,
   ExhibitionDisplayStyle,
   Memory,
@@ -3885,6 +3889,19 @@ export function buildExhibitionRoom3DScene(params: {
     wardrobe: new THREE.Group(),
     wooden_bed: new THREE.Group(),
     bedroom_tv: new THREE.Group(),
+    under_bed_scrapbook: new THREE.Group(),
+    under_bed_flashlight: new THREE.Group(),
+    bedside_drawer: new THREE.Group(),
+    trophy_shelf: new THREE.Group(),
+    cork_pinboard: new THREE.Group(),
+    crt_computer: new THREE.Group(),
+    wired_headphones: new THREE.Group(),
+    school_bag: new THREE.Group(),
+    bedroom_window: new THREE.Group(),
+    memory_radio: new THREE.Group(),
+    memory_projector: new THREE.Group(),
+    wall_clock_calendar: new THREE.Group(),
+    drawing_wall: new THREE.Group(),
   };
 
   const interactiveStates: Record<InteractiveObjectId3D, boolean> = {
@@ -3900,6 +3917,19 @@ export function buildExhibitionRoom3DScene(params: {
     wardrobe: false,
     wooden_bed: false,
     bedroom_tv: false,
+    under_bed_scrapbook: false,
+    under_bed_flashlight: false,
+    bedside_drawer: false,
+    trophy_shelf: false,
+    cork_pinboard: false,
+    crt_computer: false,
+    wired_headphones: false,
+    school_bag: false,
+    bedroom_window: false,
+    memory_radio: false,
+    memory_projector: false,
+    wall_clock_calendar: false,
+    drawing_wall: false,
   };
 
   const interactiveAnimTimers: Record<InteractiveObjectId3D, number> = {
@@ -3915,6 +3945,19 @@ export function buildExhibitionRoom3DScene(params: {
     wardrobe: 0,
     wooden_bed: 0,
     bedroom_tv: 0,
+    under_bed_scrapbook: 0,
+    under_bed_flashlight: 0,
+    bedside_drawer: 0,
+    trophy_shelf: 0,
+    cork_pinboard: 0,
+    crt_computer: 0,
+    wired_headphones: 0,
+    school_bag: 0,
+    bedroom_window: 0,
+    memory_radio: 0,
+    memory_projector: 0,
+    wall_clock_calendar: 0,
+    drawing_wall: 0,
   };
 
   // Match uploaded memories to interactive 3D objects by explicit linkedObjectId or keywords
@@ -4591,6 +4634,27 @@ export function buildExhibitionRoom3DScene(params: {
     );
   }
 
+  // Additive Interactive Childhood Bedroom System (zero changes to existing visuals)
+  const bedroomInteractions: ChildhoodBedroomInteractionController =
+    attachChildhoodBedroomInteractions({
+      rootGroup,
+      bedroomSpaceGroup: spaceGroups.bedroom,
+      studyCornerSpaceGroup: spaceGroups.study_corner,
+      playAreaSpaceGroup: spaceGroups.play_area,
+      bedGroup: interactiveObjectGroups.wooden_bed,
+      wardrobeGroup: interactiveObjectGroups.wardrobe,
+      deskGroup: interactiveObjectGroups.study_desk,
+      cricketGroup: interactiveObjectGroups.cricket_set,
+      memories: rawMemories,
+      qualityConfig,
+      matWalnut,
+      matChampagneGold,
+      matBoucleFabric,
+      registerInteractiveHitbox,
+      track,
+      cameraObstacleMeshes,
+    });
+
   // -------------------------------------------------------------------------
   // SPACE D & E: BACKYARD GARDEN & ELEVATED WOODEN TREEHOUSE (NE Garden Corner: x = 4.75, z = -2.15)
   // Positioned in the NE garden corner so the treehouse deck & ladder never obstruct
@@ -5152,6 +5216,83 @@ export function buildExhibitionRoom3DScene(params: {
           /tv|video|film|cartoon/,
         );
         break;
+      case 'under_bed_scrapbook':
+        title = 'Hidden Memory Scrapbook';
+        spaceId = 'bedroom';
+        actionMessage = 'Opened the hidden 3D memory scrapbook beneath the bed.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('under_bed_scrapbook')[0];
+        break;
+      case 'under_bed_flashlight':
+        title = 'Under-Bed Flashlight';
+        spaceId = 'bedroom';
+        actionMessage = isActive
+          ? 'Picked up the flashlight to illuminate beneath the bed.'
+          : 'Returned the flashlight beneath the bed.';
+        break;
+      case 'bedside_drawer':
+        title = 'Bedside Nightstand Drawer';
+        spaceId = 'bedroom';
+        actionMessage = isActive
+          ? 'Slid open the bedside drawer to inspect keepsakes.'
+          : 'Closed the bedside drawer.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('bedside_drawer')[0];
+        break;
+      case 'trophy_shelf':
+        title = 'Trophy & Certificate Shelf';
+        spaceId = 'bedroom';
+        actionMessage = 'Inspecting trophies & uploaded achievement certificates.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('trophy_shelf')[0];
+        break;
+      case 'cork_pinboard':
+        title = 'Cork Photo Pinboard';
+        spaceId = 'study_corner';
+        actionMessage = 'Inspecting pinned photographs on the corkboard.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('cork_pinboard')[0];
+        break;
+      case 'crt_computer':
+        title = 'Retro CRT Computer';
+        spaceId = 'study_corner';
+        actionMessage = 'Powered on the retro CRT computer desktop.';
+        break;
+      case 'wired_headphones':
+        title = 'Wired Studio Headphones';
+        spaceId = 'study_corner';
+        actionMessage = 'Toggled wired desk headphones.';
+        break;
+      case 'school_bag':
+        title = 'Childhood School Bag';
+        spaceId = 'study_corner';
+        actionMessage = 'Opened the childhood school bag to inspect school memories.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('school_bag')[0];
+        break;
+      case 'bedroom_window':
+        title = 'Sunlit Bedroom Window';
+        spaceId = 'bedroom';
+        actionMessage = 'Looking out through the bedroom window curtains.';
+        break;
+      case 'memory_radio':
+        title = 'Vintage Memory Radio';
+        spaceId = 'bedroom';
+        actionMessage = 'Tuned the vintage bedside memory radio.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('memory_radio')[0];
+        break;
+      case 'memory_projector':
+        title = 'Vintage Memory Projector';
+        spaceId = 'bedroom';
+        actionMessage = 'Focused on the vintage memory slide projector.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('memory_projector')[0];
+        break;
+      case 'wall_clock_calendar':
+        title = 'Wall Clock & Memory Calendar';
+        spaceId = 'bedroom';
+        actionMessage = 'Opened the verified memory calendar timeline.';
+        break;
+      case 'drawing_wall':
+        title = 'Childhood Drawing Wall';
+        spaceId = 'bedroom';
+        actionMessage = 'Inspecting childhood drawings & artwork.';
+        linkedMemory = bedroomInteractions.getMemoriesForInteraction('drawing_wall')[0];
+        break;
     }
 
     // Have Tech Buddy react enthusiastically to the interaction
@@ -5607,6 +5748,12 @@ export function buildExhibitionRoom3DScene(params: {
         : 0.28;
     }
 
+    // 11b. Additive Childhood Bedroom interactive props (pauses automatically when hidden)
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    bedroomInteractions.update(dt, elapsedSec, Boolean(prefersReduced), !rootGroup.visible);
+
     // 12. Rain streaks outside windows when Rainy Window atmosphere is active
     if (rainStreaksGroup.visible) {
       for (let i = 0; i < rainDrops.length; i++) {
@@ -5704,6 +5851,7 @@ export function buildExhibitionRoom3DScene(params: {
       }
     });
     activeVideoElements.length = 0;
+    bedroomInteractions.dispose();
     disposables.forEach((d) => {
       try {
         d.dispose();
@@ -5754,6 +5902,7 @@ export function buildExhibitionRoom3DScene(params: {
     getSpaceDestinationCoords,
     applyStudioCustomization,
     setBicycleRidePose,
+    bedroomInteractions,
     cleanup,
   };
 }

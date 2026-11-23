@@ -801,6 +801,13 @@ export function buildRoomInteriorColliders(_room?: any, style?: string, memories
   obbs.push({ id: 'room_bedroom_bed', cx: -5.05, cz: 3.65, hx: 0.78, hz: 1.0, rotY: Math.PI / 2 });
   obbs.push({ id: 'room_bedroom_wardrobe', cx: -4.35, cz: 6.08, hx: 0.56, hz: 0.34, rotY: Math.PI });
   obbs.push({ id: 'room_study_desk', cx: -5.25, cz: -4.65, hx: 0.68, hz: 0.38, rotY: Math.PI * 0.36 });
+  obbs.push({ id: 'room_trophy_shelf', cx: -6.38, cz: 1.38, hx: 0.22, hz: 0.62, rotY: 0 });
+  obbs.push({ id: 'room_cork_pinboard', cx: -3.55, cz: -6.25, hx: 0.68, hz: 0.18, rotY: 0 });
+  obbs.push({ id: 'room_drawing_wall', cx: -6.45, cz: 5.05, hx: 0.16, hz: 0.62, rotY: 0 });
+  obbs.push({ id: 'room_bedroom_window', cx: -1.95, cz: -6.48, hx: 0.9, hz: 0.18, rotY: 0 });
+  obbs.push({ id: 'room_memory_radio', cx: -2.02, cz: 6.02, hx: 0.26, hz: 0.22, rotY: 0 });
+  obbs.push({ id: 'room_memory_projector', cx: 2.15, cz: 5.85, hx: 0.26, hz: 0.26, rotY: 0 });
+  obbs.push({ id: 'room_wall_clock_calendar', cx: -5.38, cz: 6.08, hx: 0.36, hz: 0.12, rotY: 0 });
 
   if (effStyle === 'cinematic_video_gallery') {
     obbs.push({ id: 'room_cinema_lounge_sofa', cx: 0, cz: 3.0, hx: 1.5, hz: 0.8, rotY: 0 });
@@ -1081,6 +1088,7 @@ export interface BuiltExhibitionRoom3D {
   roomId?: string;
   cleanup?: () => void;
   solidWallMeshes?: any[];
+  bedroomInteractions?: import('./childhoodBedroomInteractions').ChildhoodBedroomInteractionController | null;
   [key: string]: any;
 }
 

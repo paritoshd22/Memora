@@ -53,6 +53,12 @@ import {
 } from '../types/museum';
 import { resolveMuseumDisplayName } from '../config/brand';
 import { getProceduralMemoryArt } from '../utils/proceduralArt';
+import { BedroomInteractionOverlay } from './BedroomInteractionOverlay';
+import {
+  BedroomCharacterPoseMode,
+  ChildhoodBedroomInteractionController,
+} from '../utils/childhoodBedroomInteractions';
+import { bedroomSfx } from '../utils/bedroomSfx';
 import { getRoomVisualThemeProfile } from '../utils/roomThemes';
 import {
   computeRoomMemoryVisualData,
@@ -256,6 +262,7 @@ interface ProximityTarget {
     | 'discovery_compass'
     | 'room_memory'
     | 'room_exit'
+    | 'room_interactive_object'
     | 'contextual_station';
   title: string;
   subtitle: string;
@@ -264,6 +271,8 @@ interface ProximityTarget {
   floorNumber?: number;
   slotIndex?: 0 | 1 | 2 | 3;
   stationId?: 'bicycle' | 'treehouse' | 'cinema' | 'radio' | 'garden';
+  objectId?: InteractiveObjectId3D;
+  promptVerb?: string;
 }
 
 export type LiftSequencePhase =
@@ -911,6 +920,41 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   };
   openStationExperienceRef.current = handleOpenStationExperience;
 
+  // Unified Childhood Bedroom Interaction State (S-a .. S-h)
+  const [activeBedroomInteraction, setActiveBedroomInteraction] =
+    useState<InteractiveObjectId3D | null>(null);
+  const [bedroomOverlayRevision, setBedroomOverlayRevision] = useState<number>(0);
+  const activeBedroomInteractionRef = useRef<InteractiveObjectId3D | null>(null);
+  activeBedroomInteractionRef.current = activeBedroomInteraction;
+
+  const explorerHeadRigRef = useRef<THREE.Object3D | null>(null);
+  const savedBedroomExploreStateRef = useRef<{
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    camX: number;
+    camY: number;
+    camZ: number;
+    lookX: number;
+    lookY: number;
+    lookZ: number;
+  } | null>(null);
+  const bedroomFocusTargetRef = useRef<{
+    cameraPos: THREE.Vector3;
+    lookAt: THREE.Vector3;
+    pose: BedroomCharacterPoseMode;
+    characterPos?: THREE.Vector3;
+    characterYaw?: number;
+  } | null>(null);
+  const pageTurnHandAnimTimerRef = useRef<number>(0);
+  const cricketSwingAnimTimerRef = useRef<number>(0);
+  const enterBedroomInteractionRef = useRef<
+    ((objectId: InteractiveObjectId3D) => boolean) | null
+  >(null);
+  const exitBedroomInteractionRef = useRef<(() => void) | null>(null);
+
   const DEFAULT_STUDIO_CONFIG: RoomCustomizationStudioConfig = useMemo(
     () => ({
       wallColorHex: '#F3EBDD',
@@ -1287,6 +1331,9 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   };
 
   const handleTriggerObject3D = (objectId: InteractiveObjectId3D) => {
+    if (enterBedroomInteractionRef.current?.(objectId)) {
+      return;
+    }
     const res =
       activeExhibitionBuiltRef.current?.triggerInteractiveObject?.(objectId);
     if (!res) return;
@@ -1308,8 +1355,6 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       openStationExperienceRef.current?.('treehouse');
     } else if (objectId === 'bedroom_tv') {
       openStationExperienceRef.current?.('cinema');
-    } else if (objectId === 'wardrobe') {
-      openStationExperienceRef.current?.('radio');
     } else if (objectId === 'tyre_swing') {
       openStationExperienceRef.current?.('garden');
     }
@@ -1723,6 +1768,8 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       onSelectWallFeatureRef.current('museum_settings');
     } else if (target.kind === 'discovery_compass') {
       handleCycleAtriumAtmosphereAndDiscover();
+    } else if (target.kind === 'room_interactive_object' && target.objectId) {
+      handleTriggerObject3D(target.objectId);
     } else if (target.kind === 'contextual_station' && target.stationId) {
       openStationExperienceRef.current?.(target.stationId);
     }
@@ -2577,6 +2624,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     headMesh.position.y = 1.48;
     headMesh.castShadow = qualityConfig.enableShadows;
     charBodyGroup.add(headMesh);
+    explorerHeadRigRef.current = headMesh;
 
     const hairBackMesh = new THREE.Mesh(
       trackStatic(
@@ -5527,6 +5575,9 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         walkthroughWalkingRef.current = false;
         setWalkthroughWalking(false);
       }
+      if (activeBedroomInteractionRef.current) {
+        exitBedroomInteractionRef.current?.();
+      }
 
       // Preserve walking momentum along the player's viewing direction so movement is never blocked
       if (entryCtx && entryCtx.preservedSpeed > 0.05) {
@@ -5605,8 +5656,142 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       setIsMouseCaptured(true);
     };
 
+    // Unified Childhood Bedroom Focus Interaction Enter / Exit (saves & restores character + camera)
+    exitBedroomInteractionRef.current = () => {
+      const prevId = activeBedroomInteractionRef.current;
+      const ctrl = activeExhibitionBuilt?.bedroomInteractions;
+      if (ctrl) {
+        ctrl.setScrapbookOpen(false);
+        ctrl.setUnderBedActive(false);
+        if (prevId === 'bedside_drawer') {
+          ctrl.toggleBedsideDrawer(false);
+        }
+        if (prevId === 'school_bag') {
+          ctrl.setSchoolBagOpen(false);
+        }
+        ctrl.stopCrtMedia();
+        if (prevId === 'crt_computer' && ctrl.isHeadphonesWorn()) {
+          ctrl.toggleHeadphonesWorn(headMesh, false);
+        }
+      }
+      bedroomFocusTargetRef.current = null;
+      pageTurnHandAnimTimerRef.current = 0;
+      cricketSwingAnimTimerRef.current = 0;
+
+      // Restore neutral character rig pose
+      charBodyGroup.position.y = 0;
+      charBodyGroup.rotation.set(0, 0, 0);
+      headMesh.rotation.set(0, 0, 0);
+      leftLeg.rotation.set(0, 0, 0);
+      rightLeg.rotation.set(0, 0, 0);
+      leftArm.rotation.set(0, 0, 0);
+      rightArm.rotation.set(0, 0, 0);
+
+      const saved = savedBedroomExploreStateRef.current;
+      if (saved) {
+        explorerGroup.position.set(saved.x, saved.y, saved.z);
+        authoritativeYaw = saved.yaw;
+        authoritativePitch = saved.pitch;
+        viewYawRef.current = saved.yaw;
+        viewPitchRef.current = saved.pitch;
+        explorerGroup.rotation.y = saved.yaw;
+        camera.position.set(saved.camX, saved.camY, saved.camZ);
+        cameraLookTarget.set(saved.lookX, saved.lookY, saved.lookZ);
+        savedBedroomExploreStateRef.current = null;
+      }
+
+      activeBedroomInteractionRef.current = null;
+      setActiveBedroomInteraction(null);
+      setBedroomOverlayRevision((r) => r + 1);
+    };
+
+    enterBedroomInteractionRef.current = (objectId: InteractiveObjectId3D) => {
+      const ctrl: ChildhoodBedroomInteractionController | null | undefined =
+        activeExhibitionBuilt?.bedroomInteractions;
+      if (!ctrl) return false;
+      const zone = ctrl.getZoneById(objectId);
+      if (!zone) return false;
+
+      if (!savedBedroomExploreStateRef.current) {
+        savedBedroomExploreStateRef.current = {
+          x: explorerGroup.position.x,
+          y: explorerGroup.position.y,
+          z: explorerGroup.position.z,
+          yaw: authoritativeYaw,
+          pitch: authoritativePitch,
+          camX: camera.position.x,
+          camY: camera.position.y,
+          camZ: camera.position.z,
+          lookX: cameraLookTarget.x,
+          lookY: cameraLookTarget.y,
+          lookZ: cameraLookTarget.z,
+        };
+      }
+
+      releaseScenePointerLock();
+      pressedKeysRef.current.clear();
+      clickToMoveTargetRef.current = null;
+
+      const focus = zone.getFocusCamera();
+      bedroomFocusTargetRef.current = {
+        cameraPos: new THREE.Vector3(...focus.cameraPos),
+        lookAt: new THREE.Vector3(...focus.lookAt),
+        pose: focus.pose,
+        characterPos: focus.characterPos
+          ? new THREE.Vector3(...focus.characterPos)
+          : undefined,
+        characterYaw: focus.characterYaw,
+      };
+
+      if (objectId === 'wooden_bed') {
+        ctrl.setUnderBedActive(true);
+      } else if (objectId === 'under_bed_flashlight') {
+        ctrl.setUnderBedActive(true);
+        ctrl.setFlashlightHeld(!ctrl.isFlashlightHeld(), headMesh);
+      } else if (objectId === 'under_bed_scrapbook') {
+        ctrl.setUnderBedActive(true);
+        ctrl.setScrapbookOpen(true);
+      } else if (objectId === 'bedside_drawer') {
+        ctrl.toggleBedsideDrawer(true);
+      } else if (objectId === 'crt_computer') {
+        ctrl.setCrtPower(true);
+      } else if (objectId === 'wired_headphones') {
+        ctrl.toggleHeadphonesWorn(headMesh);
+        ctrl.setCrtPower(true);
+      } else if (objectId === 'wardrobe') {
+        activeExhibitionBuilt?.triggerInteractiveObject?.('wardrobe');
+        bedroomSfx.play('wood_creak');
+      } else if (objectId === 'school_bag') {
+        ctrl.setSchoolBagOpen(true);
+      } else if (objectId === 'bedroom_window') {
+        bedroomSfx.play('fabric_rustle');
+      } else if (objectId === 'memory_radio') {
+        bedroomSfx.play('radio_dial');
+      } else if (objectId === 'memory_projector') {
+        ctrl.toggleProjector(true);
+      } else if (objectId === 'cricket_set') {
+        cricketSwingAnimTimerRef.current = 0.72;
+        ctrl.triggerCricketSwing();
+        activeExhibitionBuilt?.triggerInteractiveObject?.('cricket_set');
+      } else if (objectId === 'wall_clock_calendar') {
+        bedroomSfx.play('clock_chime');
+      } else {
+        bedroomSfx.play('click');
+      }
+
+      const resolvedId: InteractiveObjectId3D =
+        objectId === 'wired_headphones' ? 'crt_computer' : objectId;
+      activeBedroomInteractionRef.current = resolvedId;
+      setActiveBedroomInteraction(resolvedId);
+      setBedroomOverlayRevision((r) => r + 1);
+      return true;
+    };
+
     // Reposition character cleanly into corridor just outside room doorway when returning to museum
     setExplorerCorridorExitRef.current = (exitedRoomId: string) => {
+      if (activeBedroomInteractionRef.current) {
+        exitBedroomInteractionRef.current?.();
+      }
       cancelActiveCameraTransition();
       const exitedRoom = roomsRef.current.find((r) => r.id === exitedRoomId);
       latchedDoorwayRef.current = null;
@@ -5863,8 +6048,55 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         isMouseCapturedRef.current = false;
         setIsMouseCaptured(false);
         setIsPointerLocked(false);
+        if (activeBedroomInteractionRef.current) {
+          exitBedroomInteractionRef.current?.();
+          return;
+        }
         if (liftState.doorPhase === 'travel_closing') {
           exitLiftImmediatelyRef.current?.();
+        }
+        return;
+      }
+
+      // Keyboard controls while focused on a Childhood Bedroom interaction
+      if (activeBedroomInteractionRef.current && !isAnyModalOpenRef.current) {
+        const ctrl = activeExhibitionBuiltRef.current?.bedroomInteractions;
+        if (activeBedroomInteractionRef.current === 'under_bed_scrapbook' && ctrl) {
+          if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            const res = ctrl.turnScrapbookPage(1);
+            if (res.turned) pageTurnHandAnimTimerRef.current = 0.55;
+            setBedroomOverlayRevision((r) => r + 1);
+            return;
+          }
+          if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            const res = ctrl.turnScrapbookPage(-1);
+            if (res.turned) pageTurnHandAnimTimerRef.current = 0.55;
+            setBedroomOverlayRevision((r) => r + 1);
+            return;
+          }
+        }
+        if (activeBedroomInteractionRef.current === 'memory_projector' && ctrl) {
+          if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            ctrl.stepProjectorSlide(1);
+            setBedroomOverlayRevision((r) => r + 1);
+            return;
+          }
+          if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            ctrl.stepProjectorSlide(-1);
+            setBedroomOverlayRevision((r) => r + 1);
+            return;
+          }
+        }
+        if (activeBedroomInteractionRef.current === 'cricket_set' && e.key === ' ') {
+          e.preventDefault();
+          cricketSwingAnimTimerRef.current = 0.72;
+          ctrl?.triggerCricketSwing();
+          activeExhibitionBuiltRef.current?.triggerInteractiveObject?.('cricket_set');
+          return;
         }
         return;
       }
@@ -6465,9 +6697,11 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         ) {
           const hitData = roomHits[0].object.userData;
           if (hitData.kind === 'room_interactive_object' && hitData.objectId) {
-            const res = activeExhibitionBuilt.triggerInteractiveObject?.(
-              hitData.objectId as InteractiveObjectId3D,
-            );
+            const oid = hitData.objectId as InteractiveObjectId3D;
+            if (enterBedroomInteractionRef.current?.(oid)) {
+              return;
+            }
+            const res = activeExhibitionBuilt.triggerInteractiveObject?.(oid);
             if (res) {
               if (typeof res.climbTargetY === 'number') {
                 climbHeightOffsetRef.current = res.climbTargetY;
@@ -6487,8 +6721,6 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                 openStationExperienceRef.current?.('treehouse');
               } else if (res.objectId === 'bedroom_tv') {
                 openStationExperienceRef.current?.('cinema');
-              } else if (res.objectId === 'wardrobe') {
-                openStationExperienceRef.current?.('radio');
               } else if (res.objectId === 'tyre_swing') {
                 openStationExperienceRef.current?.('garden');
               }
@@ -7509,9 +7741,30 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                   rec.baseY + Math.sin(elapsed * 1.45 + dIdx * 0.9) * 0.028;
               }
             }
+          } else {
+            activeExhibitionBuilt.bedroomInteractions?.update(
+              delta,
+              elapsed,
+              true,
+              false,
+            );
           }
 
-          if (bicycleRideActiveRef.current && activeRoomObj) {
+          if (bedroomFocusTargetRef.current && activeRoomObj) {
+            // Character held cleanly at the focused interaction pose
+            velX = 0;
+            velZ = 0;
+            if (bedroomFocusTargetRef.current.characterPos) {
+              explorerGroup.position.set(
+                bedroomFocusTargetRef.current.characterPos.x,
+                roomFloorY + bedroomFocusTargetRef.current.characterPos.y,
+                bedroomFocusTargetRef.current.characterPos.z,
+              );
+            }
+            if (typeof bedroomFocusTargetRef.current.characterYaw === 'number') {
+              explorerGroup.rotation.y = bedroomFocusTargetRef.current.characterYaw;
+            }
+          } else if (bicycleRideActiveRef.current && activeRoomObj) {
             if (!bicycleRidePausedRef.current && !isAnyModalOpenRef.current) {
               const rideSpeed = forwardAxis > 0 ? 0.085 : 0.048;
               bicycleRideProgressRef.current =
@@ -7779,6 +8032,72 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             -Math.sin(interactAnimTimer * Math.PI * 3) * 0.9;
         }
 
+        // Focused Childhood Bedroom character pose animations (crawl, scrapbook page-turn hand, cricket bat swing, flashlight aim)
+        const bFocus = bedroomFocusTargetRef.current;
+        const bCtrl = activeExhibitionBuilt?.bedroomInteractions;
+        if (bFocus) {
+          if (bFocus.pose === 'crawl' || bFocus.pose === 'scrapbook_read') {
+            charBodyGroup.position.y = -0.58;
+            charBodyGroup.rotation.x = 1.24;
+            headMesh.rotation.x = -0.78;
+            leftLeg.rotation.x = -0.45;
+            rightLeg.rotation.x = -0.35;
+            leftArm.rotation.x = -1.15;
+            if (pageTurnHandAnimTimerRef.current > 0) {
+              pageTurnHandAnimTimerRef.current = Math.max(
+                0,
+                pageTurnHandAnimTimerRef.current - delta,
+              );
+              const t = 1 - pageTurnHandAnimTimerRef.current / 0.55;
+              rightArm.rotation.x = -1.25 - Math.sin(t * Math.PI) * 0.45;
+              rightArm.rotation.z = -Math.sin(t * Math.PI) * 0.65;
+            } else {
+              rightArm.rotation.x = -1.15;
+              rightArm.rotation.z = 0;
+            }
+          } else if (bFocus.pose === 'cricket_swing') {
+            charBodyGroup.position.y = 0;
+            charBodyGroup.rotation.x = 0.06;
+            if (cricketSwingAnimTimerRef.current > 0) {
+              cricketSwingAnimTimerRef.current = Math.max(
+                0,
+                cricketSwingAnimTimerRef.current - delta,
+              );
+              const phase = 1 - cricketSwingAnimTimerRef.current / 0.72;
+              const swingArc = Math.sin(phase * Math.PI) * 1.45;
+              rightArm.rotation.x = -0.6 - swingArc;
+              leftArm.rotation.x = -0.5 - swingArc * 0.85;
+              charBodyGroup.rotation.y = Math.sin(phase * Math.PI) * 0.45;
+            } else {
+              rightArm.rotation.x = -0.45;
+              leftArm.rotation.x = -0.4;
+              charBodyGroup.rotation.y = 0;
+            }
+          } else {
+            charBodyGroup.position.y = 0;
+            charBodyGroup.rotation.x = 0;
+            charBodyGroup.rotation.y = 0;
+            headMesh.rotation.x = 0;
+            rightArm.rotation.z = 0;
+          }
+        } else {
+          charBodyGroup.rotation.y = 0;
+          headMesh.rotation.x = 0;
+          rightArm.rotation.z = 0;
+        }
+
+        if (bCtrl?.isFlashlightHeld()) {
+          headMesh.getWorldPosition(_camPivotPos);
+          _camTargetLook
+            .set(
+              Math.sin(authoritativeYaw) * Math.cos(authoritativePitch),
+              -Math.sin(authoritativePitch) - 0.14,
+              Math.cos(authoritativeYaw) * Math.cos(authoritativePitch),
+            )
+            .normalize();
+          bCtrl.updateFlashlightAim(_camPivotPos, _camTargetLook);
+        }
+
         // Single-Memory Proximity Highlighting inside 3D Exhibition Room (every frame for smooth subtle glow)
         let activeRoomProxEval: ReturnType<
           typeof evaluateRoomMemoryProximity
@@ -7859,7 +8178,24 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
 
           if (inActiveRoom3D && activeExhibitionBuilt) {
             const activeMem = activeRoomProxEval.activePlacement?.memory;
-            if (activeMem) {
+            const bedroomProxZone =
+              !activeBedroomInteractionRef.current
+                ? activeExhibitionBuilt.bedroomInteractions?.evaluateProximity(
+                    explorerGroup.position.x,
+                    explorerGroup.position.z,
+                    false,
+                  )
+                : null;
+            if (bedroomProxZone) {
+              foundProximity = {
+                kind: 'room_interactive_object',
+                objectId: bedroomProxZone.objectId,
+                title: bedroomProxZone.title,
+                promptVerb: bedroomProxZone.promptVerb,
+                subtitle: bedroomProxZone.subtitle,
+                floorNumber: currentFloorNum,
+              };
+            } else if (activeMem) {
               foundProximity = {
                 kind: 'room_memory',
                 title: activeMem.title,
@@ -7908,17 +8244,6 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                 stationId: 'cinema',
                 title: 'Outdoor Cinema & Video Screen',
                 subtitle: 'Press E or Click to browse video collections & play videos',
-                floorNumber: currentFloorNum,
-              };
-            } else if (
-              Math.hypot(explorerGroup.position.x + 4.35, explorerGroup.position.z - 6.08) < 2.35 ||
-              Math.hypot(explorerGroup.position.x - 4.35, explorerGroup.position.z + 0.8) < 2.15
-            ) {
-              foundProximity = {
-                kind: 'contextual_station',
-                stationId: 'radio',
-                title: 'Memory Radio & Voice Archive',
-                subtitle: 'Press E or Click to browse audio collections & listen to recordings',
                 floorNumber: currentFloorNum,
               };
             } else if (
@@ -8203,6 +8528,28 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           const vis = resolveCharacterVisibility({ cameraOwner: 'scripted_gsap' });
           charBodyGroup.visible = vis.bodyVisible;
           charShadow.visible = vis.shadowVisible;
+        } else if (bedroomFocusTargetRef.current && inActiveRoom3D) {
+          const bf = bedroomFocusTargetRef.current;
+          const floorBaseY = currentFloorNum * FLOOR_HEIGHT;
+          _camTargetPos.set(
+            bf.cameraPos.x,
+            floorBaseY + bf.cameraPos.y,
+            bf.cameraPos.z,
+          );
+          _camTargetLook.set(
+            bf.lookAt.x,
+            floorBaseY + bf.lookAt.y,
+            bf.lookAt.z,
+          );
+          const focusAlpha = reducedMotion ? 1 : 1 - Math.exp(-10 * delta);
+          camera.position.lerp(_camTargetPos, focusAlpha);
+          cameraLookTarget.lerp(_camTargetLook, focusAlpha);
+          const showChar =
+            bf.pose === 'crawl' ||
+            bf.pose === 'scrapbook_read' ||
+            bf.pose === 'cricket_swing';
+          charBodyGroup.visible = showChar;
+          charShadow.visible = showChar;
         } else if (currentCameraOwner === 'first_person') {
           // True First-Person Exploration Camera (eye level at +1.66m)
           const vis = resolveCharacterVisibility({ cameraOwner: 'first_person' });
@@ -9590,9 +9937,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
          ===================================================================== */}
       {hasEnteredAtrium &&
         !isAnyModalOpen &&
+        !activeBedroomInteraction &&
         ((activeRoomObj &&
-          proximityTarget?.kind === 'room_memory' &&
-          proximityTarget.memory) ||
+          proximityTarget?.kind === 'room_interactive_object' &&
+          proximityTarget.objectId) ||
+          (activeRoomObj &&
+            proximityTarget?.kind === 'room_memory' &&
+            proximityTarget.memory) ||
           (activeRoomObj &&
             proximityTarget?.kind === 'contextual_station' &&
             proximityTarget.stationId) ||
@@ -9603,6 +9954,11 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
               type="button"
               onClick={() => {
                 if (
+                  proximityTarget?.kind === 'room_interactive_object' &&
+                  proximityTarget.objectId
+                ) {
+                  handleTriggerObject3D(proximityTarget.objectId);
+                } else if (
                   proximityTarget?.kind === 'room_memory' &&
                   proximityTarget.memory
                 ) {
@@ -9622,27 +9978,74 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                 E
               </kbd>
               <span className="text-xs font-semibold text-[#FFE2B5]">
-                {proximityTarget.kind === 'discovery_compass'
-                  ? 'Cycle Atmosphere & Discover'
-                  : proximityTarget.kind === 'contextual_station'
-                    ? proximityTarget.stationId === 'bicycle'
-                      ? 'Ride Bicycle Trail'
-                      : `Explore ${proximityTarget.title}`
-                    : 'Inspect memory'}
+                {proximityTarget.kind === 'room_interactive_object'
+                  ? proximityTarget.promptVerb || `Interact with ${proximityTarget.title}`
+                  : proximityTarget.kind === 'discovery_compass'
+                    ? 'Cycle Atmosphere & Discover'
+                    : proximityTarget.kind === 'contextual_station'
+                      ? proximityTarget.stationId === 'bicycle'
+                        ? 'Ride Bicycle Trail'
+                        : `Explore ${proximityTarget.title}`
+                      : 'Inspect memory'}
               </span>
               <span className="text-xs text-[#E8DED0] border-l border-[#493629] pl-2.5 max-w-[200px] sm:max-w-[280px] truncate">
-                {proximityTarget.kind === 'discovery_compass'
-                  ? atriumLightingMood === 'golden_hour'
-                    ? 'Golden Hour Salon'
-                    : atriumLightingMood === 'daylight_salon'
-                      ? 'Daylight Salon'
-                      : 'Evening Nocturne'
-                  : proximityTarget.kind === 'contextual_station'
-                    ? proximityTarget.subtitle
-                    : proximityTarget.memory?.title}
+                {proximityTarget.kind === 'room_interactive_object'
+                  ? proximityTarget.title
+                  : proximityTarget.kind === 'discovery_compass'
+                    ? atriumLightingMood === 'golden_hour'
+                      ? 'Golden Hour Salon'
+                      : atriumLightingMood === 'daylight_salon'
+                        ? 'Daylight Salon'
+                        : 'Evening Nocturne'
+                    : proximityTarget.kind === 'contextual_station'
+                      ? proximityTarget.subtitle
+                      : proximityTarget.memory?.title}
               </span>
             </button>
           </div>
+        )}
+
+      {hasEnteredAtrium &&
+        activeRoomObj &&
+        activeBedroomInteraction &&
+        activeExhibitionBuiltRef.current?.bedroomInteractions && (
+          <BedroomInteractionOverlay
+            activeObjectId={activeBedroomInteraction}
+            controller={activeExhibitionBuiltRef.current.bedroomInteractions}
+            revision={bedroomOverlayRevision}
+            onClose={() => exitBedroomInteractionRef.current?.()}
+            onSwitchInteraction={(oid) => enterBedroomInteractionRef.current?.(oid)}
+            onSelectMemory={(mem) => onSelectMemory(mem)}
+            onTriggerPageTurnHandAnim={() => {
+              pageTurnHandAnimTimerRef.current = 0.55;
+            }}
+            onToggleFlashlight={() => {
+              const ctrl = activeExhibitionBuiltRef.current?.bedroomInteractions;
+              if (!ctrl) return false;
+              const next = ctrl.setFlashlightHeld(
+                !ctrl.isFlashlightHeld(),
+                explorerHeadRigRef.current,
+              );
+              setBedroomOverlayRevision((r) => r + 1);
+              return next;
+            }}
+            onToggleHeadphones={() => {
+              const ctrl = activeExhibitionBuiltRef.current?.bedroomInteractions;
+              if (!ctrl) return false;
+              const next = ctrl.toggleHeadphonesWorn(explorerHeadRigRef.current);
+              setBedroomOverlayRevision((r) => r + 1);
+              return next;
+            }}
+            onTriggerCricketSwing={() => {
+              cricketSwingAnimTimerRef.current = 0.72;
+              activeExhibitionBuiltRef.current?.bedroomInteractions?.triggerCricketSwing();
+              activeExhibitionBuiltRef.current?.triggerInteractiveObject?.('cricket_set');
+            }}
+            onOpenRadioStation={() => {
+              exitBedroomInteractionRef.current?.();
+              handleOpenStationExperience('radio');
+            }}
+          />
         )}
 
       {/* =====================================================================
