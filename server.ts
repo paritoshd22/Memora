@@ -1003,10 +1003,19 @@ export async function createServer() {
   // =========================================================================
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: !disableHmr,
+        ws: disableHmr ? false : undefined,
+        watch: disableHmr ? null : {},
+      },
       appType: 'spa',
     });
+    (
+      app as express.Express & { __closeVite?: () => Promise<void> }
+    ).__closeVite = () => vite.close();
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
@@ -1023,10 +1032,37 @@ if (
   process.env.NODE_ENV !== 'test' &&
   process.env.MYMUSEUM_SKIP_AUTO_LISTEN !== '1'
 ) {
-  createServer().then((app) => {
-    const port = 3000;
-    app.listen(port, '0.0.0.0', () => {
-      console.log(`MEMORA 3D Server listening on http://localhost:${port}`);
+  createServer()
+    .then((app) => {
+      const port = Number(process.env.PORT) || 3000;
+      const server = app.listen(port, '0.0.0.0', () => {
+        console.log(`MEMORA 3D Server listening on http://localhost:${port}`);
+      });
+
+      server.on('error', (err) => {
+        console.error(`MEMORA 3D Server failed to listen on port ${port}:`, err);
+        process.exit(1);
+      });
+
+      const shutdown = () => {
+        server.close(() => {
+          const cleanup = (
+            app as express.Express & { __closeVite?: () => Promise<void> }
+          ).__closeVite;
+          if (cleanup) {
+            cleanup().finally(() => process.exit(0));
+          } else {
+            process.exit(0);
+          }
+        });
+        setTimeout(() => process.exit(0), 2000).unref();
+      };
+
+      process.once('SIGTERM', shutdown);
+      process.once('SIGINT', shutdown);
+    })
+    .catch((err) => {
+      console.error('MEMORA 3D Server failed to start:', err);
+      process.exit(1);
     });
-  });
 }
