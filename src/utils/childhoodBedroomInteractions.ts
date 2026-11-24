@@ -1702,6 +1702,45 @@ export function attachChildhoodBedroomInteractions(
   foldedGarment.position.set(0.18, 1.13, 0.02);
   wardrobeInteriorGroup.add(foldedGarment);
 
+  // Real uploaded keepsake photo frame tucked inside the upper cupboard shelf (zero fictional photos)
+  const wardrobeKeepsakePhoto = photoMemories[0] ?? null;
+  if (wardrobeKeepsakePhoto) {
+    const innerFrameGroup = new THREE.Group();
+    innerFrameGroup.position.set(-0.08, 1.66, -0.04);
+    innerFrameGroup.rotation.y = 0.14;
+    wardrobeInteriorGroup.add(innerFrameGroup);
+
+    const frameBorder = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.28, 0.34, 0.024)),
+      matChampagneGold,
+    );
+    innerFrameGroup.add(frameBorder);
+
+    const innerPhotoMat = track(
+      new THREE.MeshStandardMaterial({
+        map: buildMiniFrameTexture(
+          wardrobeKeepsakePhoto,
+          'Wardrobe Keepsake',
+          '#C9A66B',
+        ),
+        color: 0xffffff,
+        roughness: 0.42,
+      }),
+    );
+    const innerPhotoPlane = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(0.23, 0.29)),
+      innerPhotoMat,
+    );
+    innerPhotoPlane.position.z = 0.014;
+    innerPhotoPlane.userData = {
+      type: 'exhibit_memory',
+      memoryId: wardrobeKeepsakePhoto.id,
+      title: wardrobeKeepsakePhoto.title,
+      subtitle: 'Click to inspect original uploaded keepsake photograph',
+    };
+    innerFrameGroup.add(innerPhotoPlane);
+  }
+
   zones.push({
     objectId: 'wardrobe',
     spaceId: 'bedroom',

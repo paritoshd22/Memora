@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import {
   AICapability,
   AIProviderId,
@@ -7,6 +6,12 @@ import {
   ConnectionState,
   ProviderUsageMetrics,
 } from '../types/aiStudio';
+import {
+  classifyGeminiError,
+  createGeminiClient,
+  GEMINI_MODELS,
+  isValidGeminiApiKey,
+} from './geminiConfig';
 
 export interface AIProviderExecutionResult {
   data: unknown;
@@ -21,6 +26,8 @@ export interface AIProviderTestResult {
   latencyMs: number;
   model: string;
   message: string;
+  connectionStatus?: ConnectionState;
+  errorCode?: string;
 }
 
 export interface AIProviderAdapter {
@@ -36,9 +43,7 @@ export interface AIProviderAdapter {
 }
 
 function isValidApiKey(val: string | undefined): val is string {
-  if (!val) return false;
-  const trimmed = val.trim();
-  return trimmed.length >= 10 && !trimmed.startsWith('MY_');
+  return isValidGeminiApiKey(val);
 }
 
 export function parseAndValidateJson<T = Record<string, unknown>>(
@@ -143,7 +148,7 @@ function buildStructuredPrompt(req: AITaskRequest): string {
   ) {
     return [
       `Extract grounded metadata JSON for this user memory input: ${req.prompt || 'Uploaded memory'}`,
-      'Never invent people or dates not present in the input.',
+      'Never invent dates, identities, locations, relationships, or events not explicitly visible or provided in the input.',
       'Return ONLY valid JSON with keys: suggestedRoomId, suggestedRoomName, suggestedTitle, suggestedLocation, suggestedCategory, suggestedCaption, suggestedStory, suggestedTags, suggestedMotif, confidenceNote.',
     ].join('\n');
   }
@@ -184,6 +189,19 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
     return isValidApiKey(this.getApiKey());
   }
 
+  public recordExternalOutcome(
+    status: ConnectionState,
+    errorMessage?: string,
+  ): void {
+    this.connectionStatus = status;
+    this.usage.lastUsedAt = new Date().toISOString();
+    if (status === 'connected') {
+      this.usage.lastError = undefined;
+    } else if (errorMessage) {
+      this.usage.lastError = errorMessage;
+    }
+  }
+
   public getStatus(): AIProviderStatus {
     const configured = this.isConfigured();
     return {
@@ -195,14 +213,14 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
       connectionStatus: configured ? this.connectionStatus : 'missing_credentials',
       enabledCapabilities: this.supportedCapabilities,
       models: {
-        textModel: 'gemini-2.5-flash',
-        visionModel: 'gemini-2.5-flash',
-        imageModel: 'gemini-2.5-flash-image',
-        videoModel: 'veo-2.0-generate-001',
+        textModel: GEMINI_MODELS.primary,
+        visionModel: GEMINI_MODELS.vision,
+        imageModel: GEMINI_MODELS.image,
+        videoModel: GEMINI_MODELS.video,
       },
       costEstimateNote: 'Pay-as-you-go via server GEMINI_API_KEY.',
       setupInstructions:
-        'Set GEMINI_API_KEY in your server environment to enable live Gemini curation, vision, and media generation.',
+        'Configure GEMINI_API_KEY in server environment secrets to enable live Gemini curation, vision, and media analysis.',
       usage: { ...this.usage },
     };
   }
@@ -215,32 +233,52 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
       return {
         ok: false,
         latencyMs: Date.now() - started,
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODELS.primary,
+        connectionStatus: 'missing_credentials',
+        errorCode: 'MISSING_CREDENTIALS',
         message: 'GEMINI_API_KEY is not configured on the server.',
       };
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-      await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+      const ai = createGeminiClient(apiKey);
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODELS.primary,
         contents: 'Reply with OK.',
       });
+      const text = (response.text || '').trim();
+      if (!text) {
+        this.connectionStatus = 'invalid_response';
+        this.usage.lastError = 'Gemini returned an empty response during connection check.';
+        return {
+          ok: false,
+          latencyMs: Date.now() - started,
+          model: GEMINI_MODELS.primary,
+          connectionStatus: 'invalid_response',
+          errorCode: 'INVALID_AI_RESPONSE',
+          message: 'Gemini returned an empty response during connection check.',
+        };
+      }
       this.connectionStatus = 'connected';
+      this.usage.lastError = undefined;
       return {
         ok: true,
         latencyMs: Date.now() - started,
-        model: 'gemini-2.5-flash',
-        message: 'Google Gemini connection verified.',
+        model: GEMINI_MODELS.primary,
+        connectionStatus: 'connected',
+        message: `Google Gemini connection verified (${GEMINI_MODELS.primary}).`,
       };
-    } catch (err: any) {
-      this.connectionStatus = 'error';
-      this.usage.lastError = String(err?.message || err);
+    } catch (err: unknown) {
+      const classified = classifyGeminiError(err);
+      this.connectionStatus = classified.connectionStatus;
+      this.usage.lastError = classified.message;
       return {
         ok: false,
         latencyMs: Date.now() - started,
-        model: 'gemini-2.5-flash',
-        message: `Gemini connection check failed: ${String(err?.message || err)}`,
+        model: GEMINI_MODELS.primary,
+        connectionStatus: classified.connectionStatus,
+        errorCode: classified.code,
+        message: classified.message,
       };
     }
   }
@@ -248,6 +286,7 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
   public async executeTask(req: AITaskRequest): Promise<AIProviderExecutionResult> {
     const apiKey = this.getApiKey();
     if (!isValidApiKey(apiKey)) {
+      this.connectionStatus = 'missing_credentials';
       const err: any = new Error('GEMINI_API_KEY is not configured.');
       err.code = 'MISSING_CREDENTIALS';
       throw err;
@@ -257,7 +296,7 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
     this.usage.lastUsedAt = new Date().toISOString();
 
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+      const ai = createGeminiClient(apiKey);
       const prompt = buildStructuredPrompt(req);
       const parts: any[] = [{ text: prompt }];
       if (req.imageBase64 && req.imageMimeType) {
@@ -270,10 +309,18 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
       }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [{ role: 'user', parts }],
+        model: GEMINI_MODELS.primary,
+        contents: { parts },
+        config: {
+          responseMimeType: 'application/json',
+        },
       });
-      const text = response.text || '{}';
+      const text = (response.text || '').trim();
+      if (!text) {
+        const emptyErr: any = new Error('Gemini returned an empty response.');
+        emptyErr.code = 'INVALID_AI_RESPONSE';
+        throw emptyErr;
+      }
       const requiredKeys =
         req.task === 'room_design'
           ? ['themeName']
@@ -283,18 +330,27 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
       const data = parseAndValidateJson(text, requiredKeys);
       this.usage.successfulRequests++;
       this.connectionStatus = 'connected';
+      this.usage.lastError = undefined;
 
       return {
         data,
-        modelUsed: 'gemini-2.5-flash',
+        modelUsed: GEMINI_MODELS.primary,
         inputTokens: Math.ceil(prompt.length / 4),
         outputTokens: Math.ceil(text.length / 4),
         estimatedCostUsd: 0.0002,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const classified = classifyGeminiError(err);
       this.usage.failedRequests++;
-      this.usage.lastError = String(err?.message || err);
-      throw err;
+      this.connectionStatus = classified.connectionStatus;
+      this.usage.lastError = classified.message;
+      const wrapped: any = new Error(classified.message);
+      wrapped.code =
+        (err as any)?.code === 'MALFORMED_AI_OUTPUT'
+          ? 'MALFORMED_AI_OUTPUT'
+          : classified.code;
+      wrapped.connectionStatus = classified.connectionStatus;
+      throw wrapped;
     }
   }
 }

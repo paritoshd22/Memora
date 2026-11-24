@@ -318,10 +318,19 @@ export class AIRouter {
         data: exec.data,
       };
     } catch (err: any) {
-      const code =
-        err?.code === 'MALFORMED_AI_OUTPUT'
+      const rawCode = String(err?.code || '');
+      const code: NonNullable<AITaskResponse['error']>['code'] =
+        rawCode === 'MALFORMED_AI_OUTPUT'
           ? 'MALFORMED_AI_OUTPUT'
-          : 'PROVIDER_ERROR';
+          : rawCode === 'INVALID_AI_RESPONSE'
+            ? 'INVALID_AI_RESPONSE'
+            : rawCode === 'AUTHENTICATION_FAILED'
+              ? 'AUTHENTICATION_FAILED'
+              : rawCode === 'RATE_LIMITED'
+                ? 'RATE_LIMITED'
+                : rawCode === 'PROVIDER_UNAVAILABLE'
+                  ? 'PROVIDER_UNAVAILABLE'
+                  : 'PROVIDER_ERROR';
       return {
         ok: false,
         task: req.task,

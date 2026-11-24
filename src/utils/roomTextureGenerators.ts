@@ -1085,6 +1085,11 @@ export interface BuiltExhibitionRoom3D {
   disposables?: { dispose: () => void }[];
   displayRecords: BuiltExhibitionDisplayRecord3D[];
   setBicycleRidePose?: (active: boolean, pose: any, delta: number) => void;
+  updateAmbientAnimations?: (
+    elapsedSec: number,
+    playerLocalPos?: { x: number; z: number },
+    reducedMotion?: boolean,
+  ) => void;
   roomId?: string;
   cleanup?: () => void;
   solidWallMeshes?: any[];

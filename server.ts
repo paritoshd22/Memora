@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { AIRouter } from './src/server/aiRouter';
+import { GeminiProviderAdapter } from './src/server/aiProviders';
 import { AuthService } from './src/server/authService';
 import { MemoryCurationService } from './src/server/memoryCurationService';
 import { MemoryVaultService } from './src/server/memoryVaultService';
@@ -15,7 +16,14 @@ const __dirname = path.dirname(__filename);
 export const aiRouter = new AIRouter();
 export const authService = new AuthService();
 export const memoryVaultService = new MemoryVaultService();
-export const memoryCurationService = new MemoryCurationService();
+export const memoryCurationService = new MemoryCurationService({
+  onStatusUpdate: (status, errMsg) => {
+    const gemini = aiRouter.getProvider('gemini');
+    if (gemini instanceof GeminiProviderAdapter) {
+      gemini.recordExternalOutcome(status, errMsg);
+    }
+  },
+});
 export const playlistService = new PlaylistIntegrationService();
 
 function extractSessionToken(req: express.Request): string | null {
@@ -330,33 +338,54 @@ export async function createServer() {
   // 1A. AUTOMATIC GEMINI MEMORY CURATION ENDPOINTS
   // =========================================================================
   app.get('/api/curation/status', (_req, res) => {
+    const curationStatus = memoryCurationService.getStatus();
+    const providerStatus = aiRouter.getProvider('gemini')?.getStatus();
     res.json({
       ok: true,
-      geminiConfigured: memoryCurationService.isConfigured(),
-      models: {
-        curation: 'gemini-4-hydrogen',
-        transcribe: 'gemini-3.5-transcribe',
-      },
+      geminiConfigured: curationStatus.configured,
+      configured: curationStatus.configured,
+      provider: 'gemini',
+      connectionStatus:
+        providerStatus?.connectionStatus || curationStatus.connectionStatus,
+      model: curationStatus.model,
+      models: curationStatus.models,
+      lastError: providerStatus?.usage?.lastError || curationStatus.lastError,
+      lastCheckedAt: curationStatus.lastCheckedAt,
     });
   });
 
   app.post('/api/curation/analyze-item', storageRateLimiter, async (req, res) => {
     try {
       const itemInput = req.body?.item || req.body;
-      const result = await memoryCurationService.analyzeItem(itemInput);
+      const consentGranted =
+        typeof req.body?.consentGranted === 'boolean'
+          ? req.body.consentGranted
+          : true;
+      const result = await memoryCurationService.analyzeItem(itemInput, {
+        consentGranted,
+      });
       const status =
-        result.ok
+        result.httpStatus ||
+        (result.ok
           ? 200
           : result.code === 'INVALID_INPUT'
             ? 400
-            : result.code === 'RATE_LIMITED'
-              ? 429
-              : 200;
+            : result.code === 'AUTHENTICATION_FAILED'
+              ? 401
+              : result.code === 'CONSENT_REQUIRED'
+                ? 403
+                : result.code === 'RATE_LIMITED'
+                  ? 429
+                  : result.code === 'INVALID_AI_RESPONSE'
+                    ? 502
+                    : 503);
       res.status(status).json(result);
     } catch (err: any) {
-      res.status(500).json({
+      res.status(503).json({
         ok: false,
-        code: 'PROVIDER_ERROR',
+        analyzedBy: 'none',
+        connectionStatus: 'provider_unavailable',
+        code: 'PROVIDER_UNAVAILABLE',
         retryable: true,
         message: `Curation analysis failed: ${String(err?.message || err).slice(0, 140)}`,
       });

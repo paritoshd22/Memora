@@ -42,7 +42,15 @@ import {
   CameraControllerOwner,
   resolveCameraControllerOwner,
   resolveCharacterVisibility,
+  EXTERIOR_LOBBY_SPEC,
+  TWIN_ELEVATOR_SPEC,
+  getActiveTwinElevatorIndex,
+  isCharacterInPlazaOrLobby,
+  isCharacterInTwinElevatorApproachZone,
+  isCharacterInTwinElevatorCabin,
+  isCharacterInTwinElevatorDoorway,
 } from '../atriumCollision';
+import { INITIAL_FLOORS } from '../../data/initialMuseumData';
 import {
   EXHIBITION_DISPLAY_STYLE_OPTIONS,
   ROOM_ENTRANCE_TRANSITION_SPEC,
@@ -3470,7 +3478,183 @@ async function runTests() {
     console.log('✓ 30. Interactive Childhood Bedroom Colliders, Spawn Clearance & Procedural SFX verified');
   }
 
-  console.log('\nAll 30 Atrium 3D Collision, Architecture, Entry Lighting, Character-Only Doorway Entry, 3D Exhibition Room, Spotify Audio, Elevator, Gemini Category, 3D Asset/GSAP, Room Doors, Stage 00.5 Camera/Visibility, Stage 01 & Stage 01B Visual Standards, Stage 02 AI Curation, Visual Sprint V1, Character Studio, MEMORA Brand, Adaptive Desktop Graphics & Childhood Bedroom Interaction tests passed!');
+  // Test 31: Outdoor Plaza, Sliding Main Glass Entrance, Grand Double-Height Lobby & Reception Desk Collisions
+  {
+    const walkFrames = (
+      startX: number,
+      startZ: number,
+      velX: number,
+      velZ: number,
+      frames: number,
+      colliderSet: ReturnType<typeof buildFloorColliders>,
+    ) => {
+      let x = startX;
+      let z = startZ;
+      for (let i = 0; i < frames; i++) {
+        const step = resolveCharacterMovement({
+          startX: x,
+          startY: 0,
+          startZ: z,
+          velX,
+          velZ,
+          delta: 0.05,
+          totalFloors: 5,
+          colliderSet,
+        });
+        x = step.x;
+        z = step.z;
+      }
+      return { x, z };
+    };
+
+    // A. Plaza spawn clearance & zone classification
+    assert.equal(isCharacterInPlazaOrLobby(0, 35.5, 0), 'plaza', 'z=35.5 must classify as Outdoor Plaza');
+    assert.equal(isCharacterInPlazaOrLobby(0, 18.5, 0), 'lobby', 'z=18.5 must classify as Grand Double-Height Lobby');
+    assert.equal(isCharacterInPlazaOrLobby(0, 4.8, 0), 'atrium', 'z=4.8 must classify as Central Atrium');
+
+    const closedDoorColliders = buildFloorColliders({
+      floorNumber: 0,
+      includeExteriorAndLobby: true,
+      glassDoorOpenAmount: 0,
+      twinElevators: true,
+      twinDoorOpenAmounts: [0, 0],
+    });
+    const openDoorColliders = buildFloorColliders({
+      floorNumber: 0,
+      includeExteriorAndLobby: true,
+      glassDoorOpenAmount: 1,
+      twinElevators: true,
+      twinDoorOpenAmounts: [0, 0],
+    });
+
+    // Spawn on Outdoor Plaza (0, 35.5) must remain completely unobstructed
+    const plazaSpawn = sanitizeCharacterPosition({
+      position: [0, 0, 35.5],
+      floorNumber: 0,
+      totalFloors: 5,
+      includeExteriorAndLobby: true,
+      twinElevators: true,
+    });
+    assert.ok(
+      Math.hypot(plazaSpawn.x - 0, plazaSpawn.z - 35.5) < 0.05,
+      `Outdoor Plaza spawn (0, 35.5) must remain unobstructed (got ${plazaSpawn.x}, ${plazaSpawn.z})`,
+    );
+
+    // Closed Main Glass Entrance at z = 23.0 must block passage from plaza into lobby
+    const blockedAtGlass = walkFrames(0, 24.4, 0, -6.0, 12, closedDoorColliders);
+    assert.ok(
+      blockedAtGlass.z > EXTERIOR_LOBBY_SPEC.glassEntranceZ + 0.15,
+      `Closed glass entrance must block entry into lobby (z=${blockedAtGlass.z})`,
+    );
+
+    // Open Main Glass Entrance must allow smooth walk from plaza into Grand Double-Height Lobby
+    const enteredLobby = walkFrames(0, 24.4, 0, -6.0, 12, openDoorColliders);
+    assert.ok(
+      enteredLobby.z < EXTERIOR_LOBBY_SPEC.glassEntranceZ - 0.5,
+      `Open glass entrance must allow smooth entry into Grand Lobby (z=${enteredLobby.z})`,
+    );
+
+    // Reception Desk at (0, 16.8) must stop character walking straight through it
+    const hitReception = walkFrames(0, 19.2, 0, -6.0, 15, openDoorColliders);
+    assert.ok(
+      hitReception.z > 17.4,
+      `Reception Desk must block direct passthrough (z=${hitReception.z})`,
+    );
+
+    // Open Ground-Floor Archway (z = 9.6, x = 0) must allow walking freely from Lobby into Central Atrium
+    const enteredAtrium = walkFrames(0, 11.4, 0, -6.0, 12, openDoorColliders);
+    assert.ok(
+      enteredAtrium.z < EXTERIOR_LOBBY_SPEC.atriumArchZ - 0.6,
+      `Open Ground Floor Archway must connect Grand Lobby to Central Atrium (z=${enteredAtrium.z})`,
+    );
+
+    // Camera colliders at elevated eye height (2.2m) must exclude low reception desk & plaza pool curbs
+    const elevatedCamColliders = buildCameraFloorColliders(openDoorColliders, 2.2);
+    assert.equal(
+      elevatedCamColliders.obbs.some((o) => o.id === 'lobby_reception_desk'),
+      false,
+      'Elevated camera colliders must ignore low reception desk for unobstructed lobby framing',
+    );
+
+    console.log('✓ 31. Outdoor Plaza, Sliding Main Glass Entrance, Grand Double-Height Lobby & Reception Desk Collisions verified');
+  }
+
+  // Test 32: Twin Side-by-Side Panoramic North Elevators & Five-Floor MEMORA Directory
+  {
+    const walkFrames = (
+      startX: number,
+      startZ: number,
+      velX: number,
+      velZ: number,
+      frames: number,
+      colliderSet: ReturnType<typeof buildFloorColliders>,
+    ) => {
+      let x = startX;
+      let z = startZ;
+      for (let i = 0; i < frames; i++) {
+        const step = resolveCharacterMovement({
+          startX: x,
+          startY: 0,
+          startZ: z,
+          velX,
+          velZ,
+          delta: 0.05,
+          totalFloors: 5,
+          colliderSet,
+        });
+        x = step.x;
+        z = step.z;
+      }
+      return { x, z };
+    };
+
+    // A. Five Visible Floors with pre-named themed galleries & zero fabricated photos on new Floors 4 & 5
+    assert.equal(INITIAL_FLOORS.length, 5, 'MEMORA must expose 5 visible floors by default');
+    const floor3Rooms = INITIAL_ROOMS.filter((r) => r.floorId === 'floor-3' && r.status === 'active');
+    const floor4Rooms = INITIAL_ROOMS.filter((r) => r.floorId === 'floor-4' && r.status === 'active');
+    assert.equal(floor3Rooms.length, 4, 'Floor 4 (floor-3) must have 4 pre-named active themed gallery rooms');
+    assert.equal(floor4Rooms.length, 4, 'Floor 5 (floor-4) must have 4 pre-named active themed gallery rooms');
+    const newFloorRoomIds = new Set([...floor3Rooms, ...floor4Rooms].map((r) => r.id));
+    assert.equal(
+      INITIAL_MEMORIES.filter((m) => newFloorRoomIds.has(m.roomId)).length,
+      0,
+      'New Floors 4 & 5 gallery rooms must start clean with zero fictional personal photographs',
+    );
+
+    // B. Twin Elevator proximity & active shaft resolution
+    const westX = TWIN_ELEVATOR_SPEC.shaftCentersX[0];
+    const eastX = TWIN_ELEVATOR_SPEC.shaftCentersX[1];
+    assert.equal(getActiveTwinElevatorIndex(westX, -7.2), 0, 'Approaching West shaft must select West Lift (0)');
+    assert.equal(getActiveTwinElevatorIndex(eastX, -7.2), 1, 'Approaching East shaft must select East Lift (1)');
+    assert.equal(isCharacterInTwinElevatorApproachZone(westX, -7.1), 0);
+    assert.equal(isCharacterInTwinElevatorApproachZone(eastX, -7.1), 1);
+    assert.equal(isCharacterInTwinElevatorDoorway(westX, -8.6), 0);
+    assert.equal(isCharacterInTwinElevatorCabin(eastX, -9.95), 1);
+
+    // C. Independent Twin Elevator door colliders: West open allows entry, East closed blocks entry
+    const westOpenOnly = buildFloorColliders({
+      floorNumber: 0,
+      includeExteriorAndLobby: true,
+      twinElevators: true,
+      twinDoorOpenAmounts: [1.0, 0.0],
+    });
+    const walkWestCabin = walkFrames(westX, -7.6, 0, -6.0, 10, westOpenOnly);
+    assert.equal(
+      isCharacterInTwinElevatorCabin(walkWestCabin.x, walkWestCabin.z),
+      0,
+      `Open West Panoramic Lift must allow entry into cabin (z=${walkWestCabin.z})`,
+    );
+
+    const blockedEastCabin = walkFrames(eastX, -7.6, 0, -6.0, 10, westOpenOnly);
+    assert.ok(
+      blockedEastCabin.z > -8.45,
+      `Closed East Panoramic Lift must block entry while West Lift is open (z=${blockedEastCabin.z})`,
+    );
+
+    console.log('✓ 32. Twin Side-by-Side Panoramic North Elevators & Five-Floor Directory verified');
+  }
+
+  console.log('\nAll 32 Atrium 3D Collision, Architecture, Entry Lighting, Character-Only Doorway Entry, 3D Exhibition Room, Spotify Audio, Elevator, Gemini Category, 3D Asset/GSAP, Room Doors, Stage 00.5 Camera/Visibility, Stage 01 & Stage 01B Visual Standards, Stage 02 AI Curation, Visual Sprint V1, Character Studio, MEMORA Brand, Adaptive Desktop Graphics, Childhood Bedroom, Exterior/Plaza/Lobby & Twin 5-Floor Elevator tests passed!');
 }
 
 runTests().catch((err) => {

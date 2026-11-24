@@ -668,6 +668,83 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   const walkthroughWalkingRef = useRef<boolean>(false);
   walkthroughWalkingRef.current = walkthroughWalking;
 
+  // Polished 8-step room-entry transition state (warm ivory-gold veil + subtle welcome banner)
+  const [roomEntryFlashPhase, setRoomEntryFlashPhase] = useState<
+    'idle' | 'flash' | 'fade'
+  >('idle');
+  const [roomWelcomeBanner, setRoomWelcomeBanner] = useState<{
+    roomId: string;
+    title: string;
+    subtitle: string;
+    guideHint: string;
+  } | null>(null);
+  const roomTransitionTokenRef = useRef<number>(0);
+  const roomTransitionTimersRef = useRef<number[]>([]);
+  const guideTipCursorRef = useRef<number>(0);
+
+  const clearRoomTransitionTimers = () => {
+    roomTransitionTimersRef.current.forEach((id) => window.clearTimeout(id));
+    roomTransitionTimersRef.current = [];
+  };
+
+  useEffect(() => {
+    return () => {
+      clearRoomTransitionTimers();
+    };
+  }, []);
+
+  const triggerRoomEntryCinematic = (enteredRoom: Room) => {
+    clearRoomTransitionTimers();
+    const token = ++roomTransitionTokenRef.current;
+    const isReduced =
+      Boolean(museumSettingsRef.current.reducedMotion) ||
+      (typeof window !== 'undefined' &&
+        Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches));
+
+    const isChildhoodRoom =
+      enteredRoom.id === 'room-childhood' ||
+      /childhood/i.test(`${enteredRoom.name} ${enteredRoom.subtitle || ''}`);
+
+    const bannerPayload = {
+      roomId: enteredRoom.id,
+      title: enteredRoom.name,
+      subtitle: isChildhoodRoom
+        ? 'Childhood Memory Park · Open-Air Meadow'
+        : `${enteredRoom.subtitle || 'Curated Gallery'} · Floor ${enteredRoom.floorNumber + 1}`,
+      guideHint: isChildhoodRoom
+        ? 'Follow the gravel paths to the Memory Tree, Treehouse, Playground, Bedroom, or Cinema — or greet your Museum Guide ahead.'
+        : 'Explore your curated keepsakes freely, or click your Museum Guide nearby for a landmark highlight.',
+    };
+
+    if (isReduced) {
+      setRoomEntryFlashPhase('idle');
+      setRoomWelcomeBanner(bannerPayload);
+      const hideId = window.setTimeout(() => {
+        if (roomTransitionTokenRef.current === token) {
+          setRoomWelcomeBanner(null);
+        }
+      }, 4200);
+      roomTransitionTimersRef.current.push(hideId);
+      return;
+    }
+
+    setRoomEntryFlashPhase('flash');
+    const fadeId = window.setTimeout(() => {
+      if (roomTransitionTokenRef.current !== token) return;
+      setRoomEntryFlashPhase('fade');
+      setRoomWelcomeBanner(bannerPayload);
+    }, 150);
+    const clearFlashId = window.setTimeout(() => {
+      if (roomTransitionTokenRef.current !== token) return;
+      setRoomEntryFlashPhase('idle');
+    }, 560);
+    const hideBannerId = window.setTimeout(() => {
+      if (roomTransitionTokenRef.current !== token) return;
+      setRoomWelcomeBanner(null);
+    }, 4600);
+    roomTransitionTimersRef.current.push(fadeId, clearFlashId, hideBannerId);
+  };
+
   const WALKTHROUGH_ZONES = useMemo(
     () =>
       [
@@ -1605,6 +1682,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     if (activeRoomId && activeRoomId !== prevRoomId) {
       setExplorerRoomEntryRef.current?.(activeRoomId);
     } else if (prevRoomId && !activeRoomId) {
+      clearRoomTransitionTimers();
+      roomTransitionTokenRef.current += 1;
+      setRoomEntryFlashPhase('idle');
+      setRoomWelcomeBanner(null);
       setExplorerCorridorExitRef.current?.(prevRoomId);
     }
   }, [activeRoomId]);
@@ -5360,6 +5441,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         if (
           kind === 'room_memory_display' ||
           kind === 'room_interactive_object' ||
+          kind === 'room_guide_character' ||
           kind === 'room_interior_exit'
         ) {
           activeRoomInteractiveTargets.push(obj);
@@ -5648,7 +5730,14 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           ROOM_ENTRANCE_TRANSITION_SPEC.durationSec,
           Boolean(museumSettingsRef.current.reducedMotion),
         );
+        // Ensure Museum Guide is visible and warmly greeting visitors upon room entry
+        activeExhibitionBuilt.commandTechBuddy?.({
+          visible: true,
+          pose: 'waving',
+        });
       }
+
+      triggerRoomEntryCinematic(enteredRoom);
 
       lastProximityKeyRef.current = 'none';
       setProximityTarget(null);
@@ -6339,6 +6428,18 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           roomHits[0].distance <= firstWallDist + 0.45
         ) {
           const hitData = roomHits[0].object.userData;
+          if (hitData.kind === 'room_guide_character') {
+            renderer.domElement.style.cursor = 'pointer';
+            setHoverIfChanged({
+              title: hitData.title || 'Museum Guide',
+              subtitle:
+                hitData.subtitle ||
+                'Click to greet & highlight a nearby memory landmark',
+              x: tooltipX,
+              y: tooltipY,
+            });
+            return { hitInteractive: true, overFeatureWallBoard: false };
+          }
           if (hitData.kind === 'room_interactive_object' && hitData.objectId) {
             renderer.domElement.style.cursor = 'pointer';
             setHoverIfChanged({
@@ -6696,6 +6797,23 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           roomHits[0].distance <= firstWallDist + 0.45
         ) {
           const hitData = roomHits[0].object.userData;
+          if (hitData.kind === 'room_guide_character') {
+            const guideTips = [
+              'Welcome! Follow the gravel path ahead to the Central Memory Tree and open Scrapbook.',
+              'To the right, you will find the Playground Swing, Seesaw, Bicycle Trail, and the Elevated Treehouse.',
+              'Step into the Childhood Bedroom on the left to inspect the hidden memory book, desk CRT, and keepsake cupboard.',
+              'Head toward the Outdoor Cinema or Memory Radio booth anytime to play your uploaded video and voice memories.',
+            ];
+            const tip = guideTips[guideTipCursorRef.current % guideTips.length];
+            guideTipCursorRef.current += 1;
+            activeExhibitionBuilt.commandTechBuddy?.({
+              pose: 'pointing',
+              visible: true,
+            });
+            setTechBuddySpeechText(tip);
+            setShowRoomGuideBubble(true);
+            return;
+          }
           if (hitData.kind === 'room_interactive_object' && hitData.objectId) {
             const oid = hitData.objectId as InteractiveObjectId3D;
             if (enterBedroomInteractionRef.current?.(oid)) {
@@ -7728,8 +7846,12 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             }
           }
 
+          activeExhibitionBuilt.updateAmbientAnimations?.(
+            elapsed,
+            { x: explorerGroup.position.x, z: explorerGroup.position.z },
+            reducedMotion,
+          );
           if (!reducedMotion) {
-            activeExhibitionBuilt.updateAmbientAnimations?.(elapsed);
             for (
               let dIdx = 0;
               dIdx < activeExhibitionBuilt.displayRecords.length;
@@ -7741,13 +7863,6 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                   rec.baseY + Math.sin(elapsed * 1.45 + dIdx * 0.9) * 0.028;
               }
             }
-          } else {
-            activeExhibitionBuilt.bedroomInteractions?.update(
-              delta,
-              elapsed,
-              true,
-              false,
-            );
           }
 
           if (bedroomFocusTargetRef.current && activeRoomObj) {
@@ -9036,7 +9151,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         const previewSig = roomMems
           .map(
             (m) =>
-              `${m.id}:${m.title}:${m.type}:${m.date || ''}:${m.year || ''}:${m.displayOrder ?? ''}:${m.frameStyle || ''}:${m.displayStyleOverride || ''}:${m.motif}:${m.palette}:${m.hiddenFrom3D ? '1' : '0'}:${m.curatedZoneId || ''}:${m.customImageUrl ? m.customImageUrl.slice(0, 48) : ''}`,
+              `${m.id}:${m.title}:${m.type}:${m.date || ''}:${m.year || ''}:${m.displayOrder ?? ''}:${m.frameStyle || ''}:${m.displayStyleOverride || ''}:${m.motif}:${m.palette}:${m.hiddenFrom3D ? '1' : '0'}:${m.curatedZoneId || ''}:${m.placementTarget || ''}:${m.customImageUrl ? `${m.customImageUrl.length}:${m.customImageUrl.slice(-24)}` : ''}`,
           )
           .join(',');
         return `${r.id}:${r.floorNumber}:${r.slotIndex}:${r.name}:${r.subtitle}:${r.status}:${r.accentColor}:${r.exhibitionStyle || ''}:${r.galleryLayout || ''}:${JSON.stringify(r.designConfig || {})}:${roomMems.length}:${previewSig}`;
@@ -11091,6 +11206,50 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           <p className="text-xs text-[#E9D4B1] mt-0.5 whitespace-nowrap">
             {hoveredInfo.subtitle}
           </p>
+        </div>
+      )}
+      {/* Warm Ivory-Gold Room Entry Light Transition (compositor-only opacity, non-blocking) */}
+      {roomEntryFlashPhase !== 'idle' && (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none fixed inset-0 z-40 transition-opacity duration-300 ease-out ${
+            roomEntryFlashPhase === 'flash' ? 'opacity-95' : 'opacity-0'
+          }`}
+          style={{
+            background:
+              'radial-gradient(circle at 50% 45%, rgba(251, 245, 232, 0.96) 0%, rgba(235, 212, 168, 0.88) 55%, rgba(196, 159, 98, 0.78) 100%)',
+          }}
+        />
+      )}
+
+      {/* Subtle Non-Blocking Room Welcome Banner */}
+      {roomWelcomeBanner && activeRoomId === roomWelcomeBanner.roomId && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed top-20 inset-x-0 z-30 flex justify-center px-4"
+        >
+          <div className="pointer-events-auto bg-[#241E19]/94 text-[#F8F1E4] border border-[#C9A66B]/55 rounded-2xl px-5 py-3 shadow-2xl max-w-lg w-full flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[#D8B982] font-medium">
+                {roomWelcomeBanner.subtitle}
+              </p>
+              <h2 className="font-serif-display text-lg font-semibold text-[#FFF7E8] leading-snug mt-0.5">
+                {roomWelcomeBanner.title}
+              </h2>
+              <p className="text-xs text-[#E4D8C5] mt-1 leading-relaxed">
+                {roomWelcomeBanner.guideHint}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRoomWelcomeBanner(null)}
+              aria-label="Dismiss welcome banner"
+              className="shrink-0 p-1 rounded-lg text-[#D8B982] hover:text-[#FFF7E8] hover:bg-[#3A2F26] transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
     </div>

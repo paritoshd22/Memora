@@ -1421,7 +1421,41 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {providers.map((prov) => {
-                const isConnected = prov.connectionStatus === 'connected';
+                const statusMeta: Record<
+                  string,
+                  { label: string; className: string }
+                > = {
+                  connected: {
+                    label: 'Connected',
+                    className: 'bg-emerald-100 text-emerald-900',
+                  },
+                  missing_credentials: {
+                    label: 'Missing Key',
+                    className: 'bg-amber-100 text-amber-900',
+                  },
+                  auth_failed: {
+                    label: 'Authentication Failed',
+                    className: 'bg-rose-100 text-rose-900',
+                  },
+                  rate_limited: {
+                    label: 'Rate Limited',
+                    className: 'bg-amber-100 text-amber-900',
+                  },
+                  provider_unavailable: {
+                    label: 'Provider Unavailable',
+                    className: 'bg-stone-200 text-stone-800',
+                  },
+                  invalid_response: {
+                    label: 'Invalid AI Response',
+                    className: 'bg-orange-100 text-orange-900',
+                  },
+                  error: {
+                    label: 'Connection Error',
+                    className: 'bg-rose-100 text-rose-900',
+                  },
+                };
+                const st =
+                  statusMeta[prov.connectionStatus] || statusMeta.error;
                 return (
                   <div
                     key={prov.id}
@@ -1438,18 +1472,9 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
                           </h3>
                         </div>
                         <span
-                          className={`px-2.5 py-1 rounded-full text-[11px] font-medium flex items-center gap-1 ${
-                            isConnected
-                              ? 'bg-emerald-100 text-emerald-900'
-                              : 'bg-amber-100 text-amber-900'
-                          }`}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-medium ${st.className}`}
                         >
-                          <span
-                            className={`w-2 h-2 rounded-full ${
-                              isConnected ? 'bg-emerald-600' : 'bg-amber-600'
-                            }`}
-                          />
-                          {isConnected ? 'Connected' : 'Missing Key'}
+                          {st.label}
                         </span>
                       </div>
 

@@ -107,6 +107,42 @@ export const MAX_CAMERA_PITCH = 0.68;
 export const MAX_FRAME_DELTA = 0.05;
 
 /**
+ * Spatial specification for the Outdoor Plaza, Main Glass Entrance & Grand Double-Height Lobby
+ * extending southward (+Z) from Ground Floor Atrium z = +9.6.
+ */
+export const EXTERIOR_LOBBY_SPEC = {
+  atriumArchZ: 9.6,
+  atriumArchHalfWidth: 2.7,
+  lobbyHalfWidth: 9.2,
+  lobbySouthZ: 23.0,
+  glassEntranceZ: 23.0,
+  glassDoorHalfWidth: 2.72,
+  receptionCenterX: 0,
+  receptionCenterZ: 16.8,
+  receptionHalfWidth: 2.22,
+  receptionHalfDepth: 0.78,
+  plazaSpawnX: 0,
+  plazaSpawnZ: 35.5,
+  plazaHalfWidth: 18.6,
+  plazaMaxZ: 46.2,
+  extendedOuterRadius: 52.0,
+} as const;
+
+/**
+ * Twin Side-by-Side Panoramic Glass-and-Gold Elevators along the North Atrium Wall (z = -8.6..-11.35).
+ * West Lift (index 0) centered at x = -2.15, East Lift (index 1) centered at x = +2.15.
+ */
+export const TWIN_ELEVATOR_SPEC = {
+  shaftCentersX: [-2.15, 2.15] as readonly [number, number],
+  doorHalfWidth: 1.38,
+  cabinHalfWidth: 1.48,
+  shaftDoorZ: -8.6,
+  shaftCenterZ: -9.95,
+  shaftBackZ: -11.32,
+  dividerHalfWidth: 0.36,
+} as const;
+
+/**
  * Shared architectural dimensions for Room Gates, Alcoves, and Perimeter Walls.
  * Used by both Three.js visual geometry in AtriumScene3D.tsx and OBB collision geometry.
  */
@@ -636,6 +672,10 @@ export function buildFloorColliders(options: {
   isLiftDoorOpen?: boolean;
   doorOpenAmount?: number;
   roomDoorOpenAmounts?: Record<number, number>;
+  includeExteriorAndLobby?: boolean;
+  glassDoorOpenAmount?: number;
+  twinElevators?: boolean;
+  twinDoorOpenAmounts?: readonly [number, number];
 }): FloorColliderSet {
   const floorNumber = Math.max(0, Math.floor(sanitizeFiniteNumber(options.floorNumber, 0)));
   const slotStatuses = options.slotStatuses ?? {
@@ -645,6 +685,9 @@ export function buildFloorColliders(options: {
     3: 'active',
   };
   const isLiftDoorOpen = Boolean(options.isLiftDoorOpen);
+  const includeExteriorAndLobby =
+    Boolean(options.includeExteriorAndLobby) && floorNumber === 0;
+  const twinElevators = Boolean(options.twinElevators);
 
   const circles: CircleCollider[] = [];
   const obbs: OBBCollider[] = [];
@@ -659,8 +702,8 @@ export function buildFloorColliders(options: {
 
   // 2. Four Architectural Botanical Stone Planters per floor
   const planterCoords: [number, number, string][] = [
-    [-3.6, -7.4, 'planter_nw'],
-    [3.6, -7.4, 'planter_ne'],
+    [twinElevators ? -4.75 : -3.6, -7.4, 'planter_nw'],
+    [twinElevators ? 4.75 : 3.6, -7.4, 'planter_ne'],
     [-6.4, 8.2, 'planter_sw'],
     [6.4, 8.2, 'planter_se'],
   ];
@@ -673,111 +716,438 @@ export function buildFloorColliders(options: {
     });
   }
 
-  // 3. Lift Call Button Pedestal at North-East of Lift Entrance (2.15, -8.25)
+  // 3. Lift Call Button Pedestal (centered between twin lifts or east of single lift)
   circles.push({
     id: 'lift_call_pedestal',
-    cx: 2.15,
-    cz: -8.25,
+    cx: twinElevators ? 0 : 2.15,
+    cz: twinElevators ? -8.32 : -8.25,
     radius: 0.26,
   });
 
-  // 4. South Blank-Wall Interactive Feature Hub (centered at x=0, z=9.6, width=11.7m, front face at z=9.38)
-  obbs.push({
-    id: 'feature_wall_structure',
-    cx: 0,
-    cz: 9.72,
-    hx: 5.85,
-    hz: 0.34,
-    rotY: 0,
-  });
-  // Deep exterior backing behind South Wall & Feature Wall so nothing can ever exist at z > 9.38
-  obbs.push({
-    id: 'feature_wall_backing_seal',
-    cx: 0,
-    cz: 11.88,
-    hx: 8.2,
-    hz: 2.5,
-    rotY: Math.PI,
-    inwardNormalOnly: true,
-  });
-  // Left & Right Feature Wall Pilasters at x = ±5.6, z = 9.6
-  obbs.push({
-    id: 'feature_wall_pilaster_west',
-    cx: -5.6,
-    cz: 9.6,
-    hx: 0.25,
-    hz: 0.3,
-    rotY: 0,
-  });
-  obbs.push({
-    id: 'feature_wall_pilaster_east',
-    cx: 5.6,
-    cz: 9.6,
-    hx: 0.25,
-    hz: 0.3,
-    rotY: 0,
-  });
+  // 4. South Boundary: Open Atrium-to-Lobby Archway on Ground Floor (when exterior enabled)
+  //    OR Solid South Interactive Feature Wall (Upper Floors & legacy single-rotunda mode)
+  if (includeExteriorAndLobby) {
+    // Flanking piers on South Atrium Portal (x in [-5.6..-2.7] and [+2.7..+5.6] at z = 9.6)
+    obbs.push({
+      id: 'lobby_arch_pier_west',
+      cx: -4.15,
+      cz: 9.6,
+      hx: 1.45,
+      hz: 0.3,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'lobby_arch_pier_east',
+      cx: 4.15,
+      cz: 9.6,
+      hx: 1.45,
+      hz: 0.3,
+      rotY: 0,
+    });
 
-  // 5. North Lift Shaft, Jambs, Cabin Walls & Landing Doors (at x=0, z=-8.6 to -11.4)
-  obbs.push({
-    id: 'lift_shaft_west_wall',
-    cx: -1.68,
-    cz: -9.98,
-    hx: 0.24,
-    hz: 1.56,
-    rotY: 0,
-  });
-  obbs.push({
-    id: 'lift_shaft_east_wall',
-    cx: 1.68,
-    cz: -9.98,
-    hx: 0.24,
-    hz: 1.56,
-    rotY: 0,
-  });
-  obbs.push({
-    id: 'lift_shaft_back_wall',
-    cx: 0,
-    cz: -11.32,
-    hx: 1.92,
-    hz: 0.22,
-    rotY: 0,
-  });
+    // Grand Double-Height Lobby Side Walls (x = ±9.2, z = 9.6 to 23.0)
+    obbs.push({
+      id: 'lobby_west_wall',
+      cx: -EXTERIOR_LOBBY_SPEC.lobbyHalfWidth,
+      cz: 16.3,
+      hx: 0.3,
+      hz: 6.9,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'lobby_east_wall',
+      cx: EXTERIOR_LOBBY_SPEC.lobbyHalfWidth,
+      cz: 16.3,
+      hx: 0.3,
+      hz: 6.9,
+      rotY: 0,
+    });
+    // Close the triangular gaps between SW/SE rotunda corners (±7.6, 9.6) and lobby walls (±9.2, 9.6)
+    obbs.push({
+      id: 'lobby_nw_shoulder',
+      cx: -8.4,
+      cz: 9.6,
+      hx: 1.0,
+      hz: 0.32,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'lobby_ne_shoulder',
+      cx: 8.4,
+      cz: 9.6,
+      hx: 1.0,
+      hz: 0.32,
+      rotY: 0,
+    });
 
-  const openAmt =
-    options.doorOpenAmount !== undefined
-      ? Math.max(0, Math.min(1, sanitizeFiniteNumber(options.doorOpenAmount, 0)))
-      : (isLiftDoorOpen ? 1 : 0);
+    // Sculptural Reception Desk centered at (0, 16.8)
+    obbs.push({
+      id: 'lobby_reception_desk',
+      cx: EXTERIOR_LOBBY_SPEC.receptionCenterX,
+      cz: EXTERIOR_LOBBY_SPEC.receptionCenterZ,
+      hx: EXTERIOR_LOBBY_SPEC.receptionHalfWidth,
+      hz: EXTERIOR_LOBBY_SPEC.receptionHalfDepth,
+      rotY: 0,
+    });
 
-  if (openAmt < 0.95) {
-    if (openAmt <= 0.01) {
-      // Solid closed barrier when doors are fully shut
-      obbs.push({
-        id: 'lift_landing_doors_closed',
-        cx: 0,
-        cz: -8.6,
-        hx: 1.58,
-        hz: 0.16,
-        rotY: 0,
+    // Main Glass Entrance Flanking Curtain Walls (z = 23.0, outside x in [-2.72, +2.72])
+    obbs.push({
+      id: 'glass_entrance_flank_west',
+      cx: -6.0,
+      cz: EXTERIOR_LOBBY_SPEC.glassEntranceZ,
+      hx: 3.3,
+      hz: 0.24,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'glass_entrance_flank_east',
+      cx: 6.0,
+      cz: EXTERIOR_LOBBY_SPEC.glassEntranceZ,
+      hx: 3.3,
+      hz: 0.24,
+      rotY: 0,
+    });
+    // Exterior Wing Towers flanking the facade (x = ±11.4, z = 16.0..23.3)
+    obbs.push({
+      id: 'exterior_wing_tower_west',
+      cx: -11.4,
+      cz: 16.0,
+      hx: 2.3,
+      hz: 7.4,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'exterior_wing_tower_east',
+      cx: 11.4,
+      cz: 16.0,
+      hx: 2.3,
+      hz: 7.4,
+      rotY: 0,
+    });
+
+    // Dynamic Automatic Sliding Glass Entrance Doors
+    const glassOpen = Math.max(
+      0,
+      Math.min(1, sanitizeFiniteNumber(options.glassDoorOpenAmount, 0)),
+    );
+    if (glassOpen < 0.85) {
+      if (glassOpen <= 0.02) {
+        obbs.push({
+          id: 'glass_entrance_doors_closed',
+          cx: 0,
+          cz: EXTERIOR_LOBBY_SPEC.glassEntranceZ,
+          hx: 2.7,
+          hz: 0.14,
+          rotY: 0,
+        });
+      } else {
+        const slide = glassOpen * 1.42;
+        obbs.push({
+          id: 'glass_entrance_door_left',
+          cx: -0.69 - slide,
+          cz: EXTERIOR_LOBBY_SPEC.glassEntranceZ,
+          hx: 0.7,
+          hz: 0.12,
+          rotY: 0,
+        });
+        obbs.push({
+          id: 'glass_entrance_door_right',
+          cx: 0.69 + slide,
+          cz: EXTERIOR_LOBBY_SPEC.glassEntranceZ,
+          hx: 0.7,
+          hz: 0.12,
+          rotY: 0,
+        });
+      }
+    }
+
+    // Outdoor Plaza Perimeter Curbs (z = 46.8, x = ±19.0)
+    obbs.push({
+      id: 'plaza_curb_south',
+      cx: 0,
+      cz: 46.8,
+      hx: 19.5,
+      hz: 0.45,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'plaza_curb_west',
+      cx: -19.0,
+      cz: 35.0,
+      hx: 0.45,
+      hz: 12.2,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'plaza_curb_east',
+      cx: 19.0,
+      cz: 35.0,
+      hx: 0.45,
+      hz: 12.2,
+      rotY: 0,
+    });
+    // Seal outer plaza north edges behind the wing towers so visitor cannot walk behind building flanks
+    obbs.push({
+      id: 'plaza_facade_seal_west',
+      cx: -15.8,
+      cz: 22.8,
+      hx: 3.8,
+      hz: 0.5,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'plaza_facade_seal_east',
+      cx: 15.8,
+      cz: 22.8,
+      hx: 3.8,
+      hz: 0.5,
+      rotY: 0,
+    });
+
+    // Twin Reflecting Pools (x = ±8.6, z = 32.0)
+    obbs.push({
+      id: 'plaza_pool_west',
+      cx: -8.6,
+      cz: 32.0,
+      hx: 3.25,
+      hz: 5.65,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'plaza_pool_east',
+      cx: 8.6,
+      cz: 32.0,
+      hx: 3.25,
+      hz: 5.65,
+      rotY: 0,
+    });
+
+    // Outdoor Sculptural Benches (x = ±5.1, z = 39.2)
+    obbs.push({
+      id: 'plaza_bench_west',
+      cx: -5.1,
+      cz: 39.2,
+      hx: 1.25,
+      hz: 0.38,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'plaza_bench_east',
+      cx: 5.1,
+      cz: 39.2,
+      hx: 1.25,
+      hz: 0.38,
+      rotY: 0,
+    });
+
+    // Raised Plaza Tree Planters
+    const plazaTrees: [number, number][] = [
+      [-14.5, 27.5],
+      [-14.5, 34.0],
+      [-14.5, 40.5],
+      [14.5, 27.5],
+      [14.5, 34.0],
+      [14.5, 40.5],
+      [-10.2, 42.8],
+      [10.2, 42.8],
+      [-17.8, 25.0],
+      [17.8, 25.0],
+      [-17.8, 37.5],
+      [17.8, 37.5],
+    ];
+    plazaTrees.forEach(([tx, tz], idx) => {
+      circles.push({
+        id: `plaza_tree_planter_${idx}`,
+        cx: tx,
+        cz: tz,
+        radius: 1.18,
       });
-    } else {
-      // Sliding left and right door panels corresponding to actual visible door meshes
-      obbs.push({
-        id: 'lift_door_panel_left',
-        cx: -0.74 - openAmt * 1.32,
-        cz: -8.6,
-        hx: 0.74,
-        hz: 0.14,
-        rotY: 0,
-      });
-      obbs.push({
-        id: 'lift_door_panel_right',
-        cx: 0.74 + openAmt * 1.32,
-        cz: -8.6,
-        hx: 0.74,
-        hz: 0.14,
-        rotY: 0,
-      });
+    });
+  } else {
+    // Solid South Blank-Wall Interactive Feature Hub (Upper floors & default rotunda)
+    obbs.push({
+      id: 'feature_wall_structure',
+      cx: 0,
+      cz: 9.72,
+      hx: 5.85,
+      hz: 0.34,
+      rotY: 0,
+    });
+    // Deep exterior backing behind South Wall & Feature Wall so nothing can ever exist at z > 9.38
+    obbs.push({
+      id: 'feature_wall_backing_seal',
+      cx: 0,
+      cz: 11.88,
+      hx: 8.2,
+      hz: 2.5,
+      rotY: Math.PI,
+      inwardNormalOnly: true,
+    });
+    // Left & Right Feature Wall Pilasters at x = ±5.6, z = 9.6
+    obbs.push({
+      id: 'feature_wall_pilaster_west',
+      cx: -5.6,
+      cz: 9.6,
+      hx: 0.25,
+      hz: 0.3,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'feature_wall_pilaster_east',
+      cx: 5.6,
+      cz: 9.6,
+      hx: 0.25,
+      hz: 0.3,
+      rotY: 0,
+    });
+  }
+
+  // 5. North Lift Shaft(s), Jambs, Cabin Walls & Landing Doors
+  if (twinElevators) {
+    // Outer West & East Twin Shaft Walls (at x = ±3.82)
+    obbs.push({
+      id: 'twin_lift_shaft_outer_west',
+      cx: -3.82,
+      cz: -9.98,
+      hx: 0.24,
+      hz: 1.56,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'twin_lift_shaft_outer_east',
+      cx: 3.82,
+      cz: -9.98,
+      hx: 0.24,
+      hz: 1.56,
+      rotY: 0,
+    });
+    // Central Divider Pier separating West Panoramic Lift (-2.15) and East Panoramic Lift (+2.15)
+    obbs.push({
+      id: 'twin_lift_center_divider',
+      cx: 0,
+      cz: -9.98,
+      hx: TWIN_ELEVATOR_SPEC.dividerHalfWidth,
+      hz: 1.56,
+      rotY: 0,
+    });
+    // Continuous Twin Shaft Back Wall
+    obbs.push({
+      id: 'twin_lift_shaft_back_wall',
+      cx: 0,
+      cz: -11.32,
+      hx: 4.08,
+      hz: 0.22,
+      rotY: 0,
+    });
+
+    const fallbackOpen =
+      options.doorOpenAmount !== undefined
+        ? Math.max(0, Math.min(1, sanitizeFiniteNumber(options.doorOpenAmount, 0)))
+        : isLiftDoorOpen
+          ? 1
+          : 0;
+    const twinOpens: readonly [number, number] = options.twinDoorOpenAmounts ?? [
+      fallbackOpen,
+      fallbackOpen,
+    ];
+
+    TWIN_ELEVATOR_SPEC.shaftCentersX.forEach((cx, liftIdx) => {
+      const openAmt = Math.max(
+        0,
+        Math.min(1, sanitizeFiniteNumber(twinOpens[liftIdx], 0)),
+      );
+      if (openAmt < 0.92) {
+        if (openAmt <= 0.01) {
+          obbs.push({
+            id: `twin_lift_${liftIdx}_doors_closed`,
+            cx,
+            cz: -8.6,
+            hx: 1.38,
+            hz: 0.16,
+            rotY: 0,
+          });
+        } else {
+          obbs.push({
+            id: `twin_lift_${liftIdx}_door_left`,
+            cx: cx - 0.68 - openAmt * 1.08,
+            cz: -8.6,
+            hx: 0.68,
+            hz: 0.14,
+            rotY: 0,
+          });
+          obbs.push({
+            id: `twin_lift_${liftIdx}_door_right`,
+            cx: cx + 0.68 + openAmt * 1.08,
+            cz: -8.6,
+            hx: 0.68,
+            hz: 0.14,
+            rotY: 0,
+          });
+        }
+      }
+    });
+  } else {
+    // Legacy single central lift shaft (x = 0, z = -8.6 to -11.4)
+    obbs.push({
+      id: 'lift_shaft_west_wall',
+      cx: -1.68,
+      cz: -9.98,
+      hx: 0.24,
+      hz: 1.56,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'lift_shaft_east_wall',
+      cx: 1.68,
+      cz: -9.98,
+      hx: 0.24,
+      hz: 1.56,
+      rotY: 0,
+    });
+    obbs.push({
+      id: 'lift_shaft_back_wall',
+      cx: 0,
+      cz: -11.32,
+      hx: 1.92,
+      hz: 0.22,
+      rotY: 0,
+    });
+
+    const openAmt =
+      options.doorOpenAmount !== undefined
+        ? Math.max(0, Math.min(1, sanitizeFiniteNumber(options.doorOpenAmount, 0)))
+        : isLiftDoorOpen
+          ? 1
+          : 0;
+
+    if (openAmt < 0.95) {
+      if (openAmt <= 0.01) {
+        obbs.push({
+          id: 'lift_landing_doors_closed',
+          cx: 0,
+          cz: -8.6,
+          hx: 1.58,
+          hz: 0.16,
+          rotY: 0,
+        });
+      } else {
+        obbs.push({
+          id: 'lift_door_panel_left',
+          cx: -0.74 - openAmt * 1.32,
+          cz: -8.6,
+          hx: 0.74,
+          hz: 0.14,
+          rotY: 0,
+        });
+        obbs.push({
+          id: 'lift_door_panel_right',
+          cx: 0.74 + openAmt * 1.32,
+          cz: -8.6,
+          hx: 0.74,
+          hz: 0.14,
+          rotY: 0,
+        });
+      }
     }
   }
 
@@ -793,6 +1163,27 @@ export function buildFloorColliders(options: {
   }
 
   for (const seg of wallSegments) {
+    // When Twin Elevators are active, shorten the NW/NE lift wings cleanly to start at x = ±3.96
+    // so they never obstruct the West (-2.15) and East (+2.15) panoramic elevator doorways.
+    if (
+      twinElevators &&
+      (seg.id === 'perimeter_nw_lift_wing' || seg.id === 'perimeter_ne_lift_wing')
+    ) {
+      const shortened =
+        seg.id === 'perimeter_nw_lift_wing'
+          ? createWallSegmentSpec(seg.id, -3.96, -8.6, -5.4, -8.6)
+          : createWallSegmentSpec(seg.id, 5.4, -8.6, 3.96, -8.6);
+      obbs.push({
+        id: shortened.id,
+        cx: shortened.cx,
+        cz: shortened.cz,
+        hx: shortened.length * 0.5 + 0.06,
+        hz: shortened.thickness * 0.5,
+        rotY: shortened.rotY,
+        inwardNormalOnly: true,
+      });
+      continue;
+    }
     // Primary 0.48m architectural wall collider
     obbs.push({
       id: seg.id,
@@ -803,7 +1194,13 @@ export function buildFloorColliders(options: {
       rotY: seg.rotY,
       inwardNormalOnly: true,
     });
-    // Deep backing seal behind the wall segment (local z in [-2.64, -0.24])
+    // Deep backing seal behind the wall segment (skip backing seal on SW/SE feature wings when Ground Floor Lobby is open)
+    if (
+      includeExteriorAndLobby &&
+      (seg.id === 'perimeter_sw_feature_wing' || seg.id === 'perimeter_se_feature_wing')
+    ) {
+      continue;
+    }
     const sealCenter = localToWorldXZ(seg.cx, seg.cz, seg.rotY, 0, -1.2);
     obbs.push({
       id: `${seg.id}_backing_seal`,
@@ -981,7 +1378,9 @@ export function buildFloorColliders(options: {
 
   return {
     floorNumber,
-    outerRadius: ROTUNDA_WALL_RADIUS,
+    outerRadius: includeExteriorAndLobby
+      ? EXTERIOR_LOBBY_SPEC.extendedOuterRadius
+      : ROTUNDA_WALL_RADIUS,
     circles,
     obbs,
   };
@@ -1256,6 +1655,63 @@ export function isCharacterInElevatorProximity(x: number, z: number): boolean {
 }
 
 /**
+ * Twin Panoramic Elevator Proximity Helpers (West Lift = 0 at x=-2.15, East Lift = 1 at x=+2.15).
+ */
+export function isCharacterInTwinElevatorCabin(x: number, z: number): 0 | 1 | null {
+  const sx = sanitizeFiniteNumber(x, 0);
+  const sz = sanitizeFiniteNumber(z, 0);
+  if (sz > -8.65 || sz < -11.2) return null;
+  for (let i = 0; i < 2; i++) {
+    const cx = TWIN_ELEVATOR_SPEC.shaftCentersX[i];
+    if (Math.abs(sx - cx) <= 1.32) {
+      return i as 0 | 1;
+    }
+  }
+  return null;
+}
+
+export function isCharacterInTwinElevatorDoorway(x: number, z: number): 0 | 1 | null {
+  const sx = sanitizeFiniteNumber(x, 0);
+  const sz = sanitizeFiniteNumber(z, 0);
+  if (sz >= -7.45 || sz <= -9.2) return null;
+  for (let i = 0; i < 2; i++) {
+    const cx = TWIN_ELEVATOR_SPEC.shaftCentersX[i];
+    if (Math.abs(sx - cx) <= 1.48) {
+      return i as 0 | 1;
+    }
+  }
+  return null;
+}
+
+export function isCharacterInTwinElevatorApproachZone(x: number, z: number): 0 | 1 | null {
+  const sx = sanitizeFiniteNumber(x, 0);
+  const sz = sanitizeFiniteNumber(z, 0);
+  if (sz > -5.7 || sz < -8.65) return null;
+  if (Math.abs(sx) > 4.2) return null;
+  return sx <= 0 ? 0 : 1;
+}
+
+export function getActiveTwinElevatorIndex(x: number, z: number): 0 | 1 | null {
+  return (
+    isCharacterInTwinElevatorCabin(x, z) ??
+    isCharacterInTwinElevatorDoorway(x, z) ??
+    isCharacterInTwinElevatorApproachZone(x, z)
+  );
+}
+
+export function isCharacterInPlazaOrLobby(
+  x: number,
+  z: number,
+  floorNumber: number,
+): 'plaza' | 'lobby' | 'atrium' {
+  const sz = sanitizeFiniteNumber(z, 0);
+  if (floorNumber !== 0) return 'atrium';
+  if (sz > EXTERIOR_LOBBY_SPEC.glassEntranceZ) return 'plaza';
+  if (sz > EXTERIOR_LOBBY_SPEC.atriumArchZ) return 'lobby';
+  return 'atrium';
+}
+
+/**
  * Sanitizes and clamps an arbitrary 3D character position (e.g. from localStorage or state props)
  * to a guaranteed safe, obstacle-free coordinate on a valid floor.
  */
@@ -1267,6 +1723,10 @@ export function sanitizeCharacterPosition(params: {
   isLiftDoorOpen?: boolean;
   doorOpenAmount?: number;
   roomDoorOpenAmounts?: Record<number, number>;
+  includeExteriorAndLobby?: boolean;
+  glassDoorOpenAmount?: number;
+  twinElevators?: boolean;
+  twinDoorOpenAmounts?: [number, number];
   colliderSet?: FloorColliderSet;
 }): { x: number; y: number; z: number; floorNumber: number } {
   const safeTotalFloors = Math.max(1, Math.floor(sanitizeFiniteNumber(params.totalFloors, 1)));
@@ -1297,6 +1757,10 @@ export function sanitizeCharacterPosition(params: {
     isLiftDoorOpen: params.isLiftDoorOpen,
     doorOpenAmount: params.doorOpenAmount,
     roomDoorOpenAmounts: params.roomDoorOpenAmounts,
+    includeExteriorAndLobby: params.includeExteriorAndLobby,
+    glassDoorOpenAmount: params.glassDoorOpenAmount,
+    twinElevators: params.twinElevators,
+    twinDoorOpenAmounts: params.twinDoorOpenAmounts,
   });
 
   const resolved = resolveSingleStepPosition(
@@ -1553,7 +2017,11 @@ export function buildCameraFloorColliders(
         obb.id === 'room_reflection_bench' ||
         obb.id === 'room_bedroom_bed' ||
         obb.id === 'room_study_desk' ||
-        obb.id === 'room_constellation_table')
+        obb.id === 'room_constellation_table' ||
+        obb.id === 'lobby_reception_desk' ||
+        obb.id.startsWith('plaza_pool_') ||
+        obb.id.startsWith('plaza_bench_') ||
+        obb.id.startsWith('plaza_curb_'))
     ) {
       continue;
     }

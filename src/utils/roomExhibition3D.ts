@@ -327,6 +327,195 @@ export const CHILDHOOD_THEME_STYLE_PRESETS: Record<
   },
 };
 
+export interface Resolved3DMemoryPlacement {
+  x: number;
+  y: number;
+  z: number;
+  rotY: number;
+  needsEaselStand: boolean;
+  zoneKey: string;
+}
+
+/**
+ * Resolves a memory's approved Childhood World location (`curatedZoneId` or `placementTarget`)
+ * into non-overlapping, walkable-clear Three.js coordinates inside the exhibition room / park.
+ * Supports all 9 locations in CHILDHOOD_WORLD_LOCATION_CATALOGUE with per-zone slot progression
+ * and graceful overflow routing when a zone's primary display rack reaches capacity.
+ */
+export function resolve3DPlacementPosition(
+  mem: Pick<Memory, 'curatedZoneId' | 'placementTarget' | 'positionOffset'>,
+  slotInZone: number,
+  fallback: { x: number; y: number; z: number; rotY: number },
+): Resolved3DMemoryPlacement {
+  const offsetX = mem.positionOffset?.x || 0;
+  const offsetY = mem.positionOffset?.y || 0;
+  const zone = mem.curatedZoneId;
+  const target = mem.placementTarget;
+
+  // Overflow beyond 6 items in a single zone routes neatly to the perimeter meadow gallery
+  const overflowSlot = slotInZone >= 6 ? slotInZone - 6 : -1;
+  if (overflowSlot >= 0) {
+    return {
+      x: -3.2 + (overflowSlot % 4) * 1.45 + offsetX,
+      y: 1.32 + offsetY,
+      z: -5.65 + Math.floor(overflowSlot / 4) * 0.85,
+      rotY: 0,
+      needsEaselStand: true,
+      zoneKey: `${zone || target || 'overflow'}_overflow`,
+    };
+  }
+
+  if (zone === 'memory_garden') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: 1.15 + col * 1.18 + offsetX,
+      y: 1.32 + offsetY,
+      z: 4.55 - row * 1.25,
+      rotY: Math.PI * 0.92,
+      needsEaselStand: true,
+      zoneKey: 'memory_garden',
+    };
+  }
+
+  if (zone === 'backyard') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: 5.42 - row * 1.12 + offsetX,
+      y: 1.32 + offsetY,
+      z: 1.95 + col * 1.12,
+      rotY: -Math.PI * 0.48,
+      needsEaselStand: true,
+      zoneKey: 'backyard',
+    };
+  }
+
+  if (zone === 'treehouse' || target === 'treehouse_nook') {
+    const col = slotInZone % 2;
+    const row = Math.floor(slotInZone / 2);
+    return {
+      x: 4.18 + col * 1.02 + offsetX,
+      y: 2.86 + offsetY,
+      z: -2.42 + row * 0.72,
+      rotY: -Math.PI * 0.22,
+      needsEaselStand: false,
+      zoneKey: 'treehouse',
+    };
+  }
+
+  if (zone === 'bicycle_trail' || target === 'bicycle_trail') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: 2.85 + col * 1.15 + offsetX,
+      y: 1.28 + offsetY,
+      z: 5.55 - row * 0.85,
+      rotY: Math.PI,
+      needsEaselStand: true,
+      zoneKey: 'bicycle_trail',
+    };
+  }
+
+  if (zone === 'bedroom' || target === 'bedside_shelf') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: -5.68 + offsetX,
+      y: 1.66 + row * 0.78 + offsetY,
+      z: 2.45 + col * 1.08,
+      rotY: Math.PI / 2,
+      needsEaselStand: false,
+      zoneKey: 'bedroom',
+    };
+  }
+
+  if (zone === 'study_corner' || target === 'study_desk') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: -5.35 + col * 0.96 + offsetX,
+      y: 1.54 + row * 0.72 + offsetY,
+      z: -4.85,
+      rotY: Math.PI * 0.28,
+      needsEaselStand: false,
+      zoneKey: 'study_corner',
+    };
+  }
+
+  if (zone === 'outdoor_cinema' || target === 'cinema_screen') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: 2.35 + col * 1.14 + offsetX,
+      y: 1.46 + row * 0.72 + offsetY,
+      z: -4.82,
+      rotY: -Math.PI * 0.14,
+      needsEaselStand: true,
+      zoneKey: 'outdoor_cinema',
+    };
+  }
+
+  if (zone === 'memory_radio' || target === 'audio_booth') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: 5.65 + offsetX,
+      y: 1.44 + row * 0.72 + offsetY,
+      z: -0.82 + col * 1.02,
+      rotY: -Math.PI / 2,
+      needsEaselStand: false,
+      zoneKey: 'memory_radio',
+    };
+  }
+
+  if (zone === 'keepsake_corner' || target === 'keepsake_cabinet') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: -5.58 + offsetX,
+      y: 1.42 + row * 0.74 + offsetY,
+      z: -2.25 + col * 1.05,
+      rotY: Math.PI / 2,
+      needsEaselStand: true,
+      zoneKey: 'keepsake_corner',
+    };
+  }
+
+  if (target === 'garden_trail') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: 5.52 - row * 1.1 + offsetX,
+      y: 1.36 + offsetY,
+      z: -2.65 + col * 1.35,
+      rotY: -Math.PI * 0.46,
+      needsEaselStand: true,
+      zoneKey: 'garden_trail',
+    };
+  }
+
+  if (target === 'scrapbook_podium') {
+    return {
+      x: -0.65 + (slotInZone % 3) * 0.65 + offsetX,
+      y: 1.28 + offsetY,
+      z: -0.45,
+      rotY: 0,
+      needsEaselStand: false,
+      zoneKey: 'scrapbook_podium',
+    };
+  }
+
+  return {
+    x: fallback.x + offsetX,
+    y: fallback.y + offsetY,
+    z: fallback.z,
+    rotY: fallback.rotY,
+    needsEaselStand: false,
+    zoneKey: 'default',
+  };
+}
+
 /**
  * Generates a high-resolution warm ivory & champagne-beige Calacatta/Crema Marfil marble texture
  * with organic natural veining, subtle mineral clouds, large-format architectural slab joints,
@@ -1722,6 +1911,7 @@ export function buildExhibitionRoom3DScene(params: {
 
   // Only the Childhood category becomes an open-air park. Other categories keep
   // the original museum architecture and render order completely unchanged.
+  let parkSeesawPivot: THREE.Object3D | null = null;
   if (isChildhoodPark) {
     const architectureShellChildren = rootGroup.children.slice(architectureShellStartIndex);
     const roomArchitectureGroup = new THREE.Group();
@@ -1743,12 +1933,13 @@ export function buildExhibitionRoom3DScene(params: {
       if (hiddenShellObjects.has(cameraObstacleMeshes[i])) cameraObstacleMeshes.splice(i, 1);
     }
 
-    buildChildhoodParkEnvironment({
+    const builtPark = buildChildhoodParkEnvironment({
       root: rootGroup,
       track,
       cameraObstacleMeshes,
       enableShadows: qualityConfig.enableShadows,
     });
+    parkSeesawPivot = (builtPark.userData?.seesawPivot as THREE.Object3D) || null;
   }
 
   // Animated groups for smooth render-loop ambient motion
@@ -1761,6 +1952,10 @@ export function buildExhibitionRoom3DScene(params: {
   let guideCharacterGroup: THREE.Group | null = null;
   let guideRightArmPivot: THREE.Group | null = null;
   let guideHeadPivot: THREE.Group | null = null;
+  let guideTorsoMesh: THREE.Mesh | null = null;
+  let guideLeftArmMesh: THREE.Mesh | null = null;
+  let guideWasVisitorNear = false;
+  let guideApproachWaveTimer = 0;
 
   // =========================================================================
   // 3B. EXACT INTERIOR REPLICATION: 7 INTERACTIVE MEMORY EXHIBITION ZONES + 3D GUIDE CHARACTER
@@ -3134,6 +3329,7 @@ export function buildExhibitionRoom3DScene(params: {
     guideTorso.position.set(0, 0.98, 0);
     guideTorso.scale.set(1.12, 1, 0.78);
     guideCharacterGroup.add(guideTorso);
+    guideTorsoMesh = guideTorso;
 
     // Atom orbital rings emblem on hoodie chest (matching the reference character's hoodie)
     [-0.55, 0.55, 1.57].forEach((rotZ) => {
@@ -3182,6 +3378,7 @@ export function buildExhibitionRoom3DScene(params: {
     leftArm.position.set(-0.24, 0.94, 0.02);
     leftArm.rotation.z = 0.18;
     guideCharacterGroup.add(leftArm);
+    guideLeftArmMesh = leftArm;
 
     // Right Arm extended in an open, welcoming museum-host gesture toward the room centerpiece
     guideRightArmPivot = new THREE.Group();
@@ -3231,70 +3428,90 @@ export function buildExhibitionRoom3DScene(params: {
     hairCrown.position.set(0, 0.055, -0.015);
     hairCrown.scale.set(1.02, 0.92, 1.04);
     guideHeadPivot.add(hairCrown);
+
+    // Clickable / hoverable hitbox so visitors can greet the guide and receive landmark tips
+    const guideHitbox = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.42, 0.42, 1.65, 10)),
+      track(new THREE.MeshBasicMaterial({ visible: false })),
+    );
+    guideHitbox.position.set(0, 0.85, 0);
+    guideHitbox.userData = {
+      kind: 'room_guide_character',
+      roomId: room.id,
+      title: 'Museum Guide',
+      subtitle: 'Click to greet & highlight a nearby memory landmark',
+    };
+    guideCharacterGroup.add(guideHitbox);
   }
 
   // =========================================================================
-  // 4. BUILD INDIVIDUAL 3D MEMORY EXHIBITION DISPLAYS (ALL 8 STYLES)
+  // 4. BUILD INDIVIDUAL 3D MEMORY EXHIBITION DISPLAYS (ALL 8 STYLES & 9 PARK LOCATIONS)
   // =========================================================================
+  // Only approved, visible memories appear in 3D (pending review drafts stay hidden until approved)
+  const visibleSection4Memories = rawMemories.filter((m) => !m.hiddenFrom3D);
   const placements = computeExhibitionPlacements(
     room,
-    rawMemories,
+    visibleSection4Memories,
     effectiveStyle,
   );
+  const zoneSlotCounters: Record<string, number> = {};
 
   placements.forEach((p, pIdx) => {
     const mem = p.memory;
-    const offsetX = mem.positionOffset?.x || 0;
-    const offsetY = mem.positionOffset?.y || 0;
-    let targetX = p.x + offsetX;
-    let localY = p.y - floorBaseY + offsetY;
-    let targetZ = p.z;
-    let targetRotY = p.rotY;
+    const zoneKey =
+      mem.curatedZoneId || mem.placementTarget || 'default';
+    const slotInZone = zoneSlotCounters[zoneKey] || 0;
+    zoneSlotCounters[zoneKey] = slotInZone + 1;
 
-    // If the user or Gemini curator assigned a 3D placement target, position it at that zone
-    if (mem.placementTarget === 'study_desk') {
-      targetX = -5.15 + (pIdx % 3) * 0.38 + offsetX;
-      localY = 1.48 + offsetY;
-      targetZ = -4.55;
-      targetRotY = Math.PI * 0.36;
-    } else if (mem.placementTarget === 'bedside_shelf') {
-      targetX = -5.65 + offsetX;
-      localY = 1.75 + (pIdx % 2) * 0.55 + offsetY;
-      targetZ = 2.65 + (pIdx % 3) * 0.55;
-      targetRotY = Math.PI / 2;
-    } else if (mem.placementTarget === 'scrapbook_podium') {
-      targetX = -0.45 + (pIdx % 3) * 0.45 + offsetX;
-      localY = 1.28 + offsetY;
-      targetZ = -0.35;
-      targetRotY = 0;
-    } else if (mem.placementTarget === 'garden_trail') {
-      targetX = 5.72 + offsetX;
-      localY = 1.38 + offsetY;
-      targetZ = -3.45 + (pIdx % 4) * 1.45;
-      targetRotY = -Math.PI * 0.46;
-    } else if (mem.placementTarget === 'treehouse_nook') {
-      targetX = 4.35 + (pIdx % 2) * 0.72 + offsetX;
-      localY = 2.86 + offsetY;
-      targetZ = -2.25;
-      targetRotY = -Math.PI * 0.22;
-    } else if (mem.placementTarget === 'bicycle_trail') {
-      targetX = 0.65 + (pIdx % 3) * 1.45 + offsetX;
-      localY = 1.26 + offsetY;
-      targetZ = 5.45;
-      targetRotY = Math.PI;
-    }
+    const resolvedPos = resolve3DPlacementPosition(mem, slotInZone, {
+      x: p.x,
+      y: p.y - floorBaseY,
+      z: p.z,
+      rotY: p.rotY,
+    });
+
+    const targetX = resolvedPos.x;
+    const localY = resolvedPos.y;
+    const targetZ = resolvedPos.z;
+    const targetRotY = resolvedPos.rotY;
 
     const displayGroup = new THREE.Group();
+    displayGroup.name = `memora_photo_display_${mem.id}`;
     displayGroup.position.set(targetX, localY, targetZ);
     displayGroup.rotation.y = targetRotY;
     // Section 3B already mounts the first 7 memories into the dedicated Memory Wall,
     // Central Tree Floating Canopy, Scrapbook, Cinema, and Audio zones.
-    // Only add additional standalone Section 4 frames to rootGroup when an explicit
-    // placementTarget is set or for overflow memories beyond Section 3B's 7 slots,
-    // preventing overlapping duplicate frames in the middle of the room.
-    const isAlreadyInSection3B = pIdx < 7 && !mem.placementTarget;
+    // Any memory with an explicit approved placement (curatedZoneId or placementTarget)
+    // or overflow beyond Section 3B mounts cleanly as a physical 3D display at its approved location.
+    const hasExplicitPlacement = Boolean(mem.curatedZoneId || mem.placementTarget);
+    const isAlreadyInSection3B = pIdx < 7 && !hasExplicitPlacement;
     if (!isAlreadyInSection3B) {
       rootGroup.add(displayGroup);
+    }
+
+    // Grounded walnut-and-champagne-brass freestanding easel for outdoor park displays
+    if (resolvedPos.needsEaselStand && !isAlreadyInSection3B) {
+      const standHeight = Math.max(0.55, localY - 0.12);
+      const legGeo = track(new THREE.BoxGeometry(0.045, standHeight, 0.045));
+      [-0.32, 0.32].forEach((lx) => {
+        const leg = new THREE.Mesh(legGeo, matWalnut);
+        leg.position.set(lx, -standHeight * 0.5 - 0.08, -0.04);
+        leg.rotation.x = 0.08;
+        displayGroup.add(leg);
+      });
+      const backLeg = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.04, standHeight * 1.05, 0.04)),
+        matWalnut,
+      );
+      backLeg.position.set(0, -standHeight * 0.5 - 0.08, -0.26);
+      backLeg.rotation.x = -0.26;
+      displayGroup.add(backLeg);
+      const ledgeBar = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.92, 0.04, 0.09)),
+        matChampagneGold,
+      );
+      ledgeBar.position.set(0, -0.58, 0.03);
+      displayGroup.add(ledgeBar);
     }
 
     let baseFrameHex: string = '#FFFFFF';
@@ -3391,6 +3608,31 @@ export function buildExhibitionRoom3DScene(params: {
     const isVideoMem = (mem.type || mem.mediaType) === 'video';
     const videoSrc = mem.mediaUrl || mem.customImageUrl || '';
 
+    // Warm ivory archival museum mat backing so aspect-ratio-fitted photos sit gracefully framed
+    const matBoardW = frameW - 0.1;
+    const matBoardH = frameH - 0.1;
+    const matBoardMesh = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(matBoardW, matBoardH)),
+      track(
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#F5EDE0'),
+          roughness: 0.9,
+          metalness: 0.02,
+        }),
+      ),
+    );
+    matBoardMesh.position.z = frameDepth * 0.5 + 0.006;
+    displayGroup.add(matBoardMesh);
+
+    const artPlaneMaxW = frameW - 0.16;
+    const artPlaneMaxH = frameH - 0.16;
+    const artPlane = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(artPlaneMaxW, artPlaneMaxH)),
+      artMat,
+    );
+    artPlane.position.z = frameDepth * 0.5 + 0.014;
+    displayGroup.add(artPlane);
+
     if (
       isVideoMem &&
       p.isMainCinemaScreen &&
@@ -3417,33 +3659,66 @@ export function buildExhibitionRoom3DScene(params: {
         // Fallback if browser blocks even muted playback
       });
     } else {
-      const imgDataUrl =
-        mem.customImageUrl ||
-        getProceduralMemoryArt(
-          mem.motif,
-          mem.palette,
-          mem.title,
-          mem.location,
-        );
+      const candidateImgUrl =
+        mem.customImageUrl && !mem.customImageUrl.startsWith('idb://')
+          ? mem.customImageUrl
+          : mem.mediaUrl &&
+              !mem.mediaUrl.startsWith('idb://') &&
+              (mem.type === 'image' || mem.mediaType === 'image')
+            ? mem.mediaUrl
+            : '';
+      const fallbackArtUrl = getProceduralMemoryArt(
+        mem.motif,
+        mem.palette,
+        mem.title,
+        mem.location,
+      );
+      const imgDataUrl = candidateImgUrl || fallbackArtUrl;
       const img = new Image();
+      img.crossOrigin = 'anonymous';
       const artTex = track(new THREE.Texture(img));
       artTex.colorSpace = THREE.SRGBColorSpace;
       artTex.anisotropy = maxAnisotropy;
+      artTex.minFilter = THREE.LinearMipmapLinearFilter;
+      artTex.magFilter = THREE.LinearFilter;
+      artTex.generateMipmaps = true;
       img.onload = () => {
+        const natW = img.naturalWidth || 4;
+        const natH = img.naturalHeight || 3;
+        const imgAspect = natW / natH;
+        const boxAspect = artPlaneMaxW / artPlaneMaxH;
+        if (imgAspect > boxAspect) {
+          artPlane.scale.set(1, Math.max(0.28, boxAspect / imgAspect), 1);
+        } else {
+          artPlane.scale.set(Math.max(0.28, imgAspect / boxAspect), 1, 1);
+        }
         artTex.needsUpdate = true;
         artMat.map = artTex;
         artMat.emissiveMap = artTex;
         artMat.needsUpdate = true;
       };
+      img.onerror = () => {
+        if (img.src !== fallbackArtUrl) {
+          img.src = fallbackArtUrl;
+        }
+      };
       img.src = imgDataUrl;
     }
 
-    const artPlane = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(frameW - 0.12, frameH - 0.12)),
-      artMat,
-    );
-    artPlane.position.z = frameDepth * 0.5 + 0.012;
-    displayGroup.add(artPlane);
+    // Subtle champagne-brass corner medallion indicates an interactive placed photograph
+    if (mem.customImageUrl || mem.curatedZoneId) {
+      const badgeDot = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.036, 0.036, 0.014, 14)),
+        matChampagneGold,
+      );
+      badgeDot.rotation.x = Math.PI / 2;
+      badgeDot.position.set(
+        frameW * 0.5 - 0.06,
+        -frameH * 0.5 + 0.06,
+        frameDepth * 0.5 + 0.02,
+      );
+      displayGroup.add(badgeDot);
+    }
 
     const haloMat = track(
       new THREE.MeshBasicMaterial({
@@ -5619,17 +5894,35 @@ export function buildExhibitionRoom3DScene(params: {
 
   let lastAnimElapsedSec = 0;
 
-  // Continuous ambient animation for Floating Memories, 12 Interactive 3D Objects, Rain/Atmosphere & Tech Buddy
-  const updateAmbientAnimations = (elapsedSec: number) => {
+  // Continuous ambient animation for Floating Memories, Interactive 3D Objects, Park Seesaw, Atmosphere & Museum Guide
+  const updateAmbientAnimations = (
+    elapsedSec: number,
+    playerLocalPos?: { x: number; z: number },
+    reducedMotionOverride?: boolean,
+  ) => {
     const dt = Math.min(0.1, Math.max(0.001, elapsedSec - lastAnimElapsedSec));
     lastAnimElapsedSec = elapsedSec;
+    const prefersReduced =
+      typeof reducedMotionOverride === 'boolean'
+        ? reducedMotionOverride
+        : typeof window !== 'undefined' &&
+          Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
-    for (let i = 0; i < animatedFloatingFrames.length; i++) {
-      const item = animatedFloatingFrames[i];
-      item.group.position.y =
-        item.baseY + Math.sin(elapsedSec * 1.35 + item.phase) * 0.045;
-      item.group.rotation.y =
-        item.baseRotY + Math.cos(elapsedSec * 0.95 + item.phase) * 0.032;
+    if (!prefersReduced) {
+      for (let i = 0; i < animatedFloatingFrames.length; i++) {
+        const item = animatedFloatingFrames[i];
+        item.group.position.y =
+          item.baseY + Math.sin(elapsedSec * 1.35 + item.phase) * 0.045;
+        item.group.rotation.y =
+          item.baseRotY + Math.cos(elapsedSec * 0.95 + item.phase) * 0.032;
+      }
+    }
+
+    // Gentle playground seesaw motion in Childhood Memory Park
+    if (parkSeesawPivot) {
+      parkSeesawPivot.rotation.z = prefersReduced
+        ? 0.06
+        : Math.sin(elapsedSec * 1.15) * 0.11;
     }
 
     // Decrement burst timers
@@ -5652,7 +5945,7 @@ export function buildExhibitionRoom3DScene(params: {
     }
 
     // 2. Toy Train chugging around the central circular track
-    if (toyTrainCarriageGroup && interactiveStates.toy_train) {
+    if (toyTrainCarriageGroup && interactiveStates.toy_train && !prefersReduced) {
       const trainAngle = elapsedSec * 0.75;
       const trackR = 1.62;
       toyTrainCarriageGroup.position.set(
@@ -5665,15 +5958,16 @@ export function buildExhibitionRoom3DScene(params: {
 
     // 3. Hanging Tyre Swing pendulum motion
     if (tyreSwingPivot) {
-      const swingAmp =
-        interactiveAnimTimers.tyre_swing > 0 || interactiveStates.tyre_swing
+      const swingAmp = prefersReduced
+        ? 0
+        : interactiveAnimTimers.tyre_swing > 0 || interactiveStates.tyre_swing
           ? 0.28
           : 0.035;
       tyreSwingPivot.rotation.z = Math.sin(elapsedSec * 2.4) * swingAmp;
     }
 
     // 4. Bicycle wheels spin when triggered
-    if (bicycleFrontWheel && bicycleRearWheel) {
+    if (bicycleFrontWheel && bicycleRearWheel && !prefersReduced) {
       if (interactiveAnimTimers.bicycle > 0 || interactiveStates.bicycle) {
         bicycleFrontWheel.rotation.z -= dt * 8.5;
         bicycleRearWheel.rotation.z -= dt * 8.5;
@@ -5682,7 +5976,7 @@ export function buildExhibitionRoom3DScene(params: {
 
     // 5. Cricket bat swing & ball arc
     if (cricketBatPivot && cricketBallMesh) {
-      if (interactiveAnimTimers.cricket_set > 0) {
+      if (interactiveAnimTimers.cricket_set > 0 && !prefersReduced) {
         const phase = (2.4 - interactiveAnimTimers.cricket_set) / 2.4;
         cricketBatPivot.rotation.z = -0.28 + Math.sin(phase * Math.PI * 2) * 0.85;
         cricketBallMesh.position.y =
@@ -5697,7 +5991,7 @@ export function buildExhibitionRoom3DScene(params: {
 
     // 6. Hopscotch marker puck hopping across squares
     if (hopscotchPuckMesh) {
-      if (interactiveAnimTimers.hopscotch > 0 || interactiveStates.hopscotch) {
+      if ((interactiveAnimTimers.hopscotch > 0 || interactiveStates.hopscotch) && !prefersReduced) {
         const hopPhase = (elapsedSec * 2.2) % 1.7;
         hopscotchPuckMesh.position.z = -hopPhase;
         hopscotchPuckMesh.position.y =
@@ -5715,7 +6009,7 @@ export function buildExhibitionRoom3DScene(params: {
     }
 
     // 8. Spinning Globe rotation
-    if (globeSphereMesh) {
+    if (globeSphereMesh && !prefersReduced) {
       const spinSpeed =
         interactiveAnimTimers.spinning_globe > 0 ||
         interactiveStates.spinning_globe
@@ -5733,7 +6027,7 @@ export function buildExhibitionRoom3DScene(params: {
 
     // 10. Bedroom pillows & Teddy Bear cheerful bounce
     if (bedPillowBounceGroup) {
-      if (interactiveAnimTimers.wooden_bed > 0) {
+      if (interactiveAnimTimers.wooden_bed > 0 && !prefersReduced) {
         bedPillowBounceGroup.position.y =
           0.56 + Math.abs(Math.sin(elapsedSec * 9)) * 0.11;
       } else {
@@ -5744,18 +6038,17 @@ export function buildExhibitionRoom3DScene(params: {
     // 11. Bedroom TV Screen glow pulse
     if (bedroomTvScreenMat) {
       bedroomTvScreenMat.emissiveIntensity = interactiveStates.bedroom_tv
-        ? 0.85 + Math.sin(elapsedSec * 6) * 0.12
+        ? prefersReduced
+          ? 0.82
+          : 0.85 + Math.sin(elapsedSec * 6) * 0.12
         : 0.28;
     }
 
     // 11b. Additive Childhood Bedroom interactive props (pauses automatically when hidden)
-    const prefersReduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    bedroomInteractions.update(dt, elapsedSec, Boolean(prefersReduced), !rootGroup.visible);
+    bedroomInteractions.update(dt, elapsedSec, prefersReduced, !rootGroup.visible);
 
     // 12. Rain streaks outside windows when Rainy Window atmosphere is active
-    if (rainStreaksGroup.visible) {
+    if (rainStreaksGroup.visible && !prefersReduced) {
       for (let i = 0; i < rainDrops.length; i++) {
         const rd = rainDrops[i];
         rd.mesh.position.y -= rd.speed * dt;
@@ -5765,11 +6058,32 @@ export function buildExhibitionRoom3DScene(params: {
       }
     }
 
-    // 13. Tech Buddy Autonomous Walking & 10-Pose Articulation
+    // 13. Museum Guide Character: Natural Idle, Visitor Approach Turning & Welcome Wave
     if (guideCharacterGroup) {
       const dx = techBuddyTargetPos.x - guideCharacterGroup.position.x;
       const dz = techBuddyTargetPos.z - guideCharacterGroup.position.z;
       const dist = Math.hypot(dx, dz);
+
+      let visitorNear = false;
+      let desiredIdleYaw = techBuddyTargetYaw;
+
+      if (playerLocalPos) {
+        const vdx = playerLocalPos.x - guideCharacterGroup.position.x;
+        const vdz = playerLocalPos.z - guideCharacterGroup.position.z;
+        const visitorDist = Math.hypot(vdx, vdz);
+        if (visitorDist < 4.1 && visitorDist > 0.25) {
+          visitorNear = true;
+          desiredIdleYaw = Math.atan2(vdx, vdz);
+        }
+      }
+
+      if (visitorNear && !guideWasVisitorNear) {
+        guideApproachWaveTimer = 2.6;
+      }
+      guideWasVisitorNear = visitorNear;
+      if (guideApproachWaveTimer > 0) {
+        guideApproachWaveTimer = Math.max(0, guideApproachWaveTimer - dt);
+      }
 
       if (dist > 0.08) {
         const moveSpeed = techBuddyPose === 'running' ? 3.2 : 1.85;
@@ -5777,16 +6091,20 @@ export function buildExhibitionRoom3DScene(params: {
         guideCharacterGroup.position.x += (dx / dist) * step;
         guideCharacterGroup.position.z += (dz / dist) * step;
         guideCharacterGroup.rotation.y = Math.atan2(dx, dz);
-        guideCharacterGroup.position.y =
-          Math.abs(Math.sin(elapsedSec * 9.5)) * 0.045;
+        guideCharacterGroup.position.y = prefersReduced
+          ? 0
+          : Math.abs(Math.sin(elapsedSec * 9.5)) * 0.045;
       } else {
-        guideCharacterGroup.rotation.y +=
-          (techBuddyTargetYaw - guideCharacterGroup.rotation.y) *
-          Math.min(1, dt * 6);
+        // Shortest-angle smooth yaw blend toward visitor or resting facing
+        const yawDiff = Math.atan2(
+          Math.sin(desiredIdleYaw - guideCharacterGroup.rotation.y),
+          Math.cos(desiredIdleYaw - guideCharacterGroup.rotation.y),
+        );
+        guideCharacterGroup.rotation.y += yawDiff * Math.min(1, dt * 5.2);
         guideCharacterGroup.position.y =
           techBuddyPose === 'sitting'
             ? -0.28
-            : techBuddyPose === 'celebrating'
+            : techBuddyPose === 'celebrating' && !prefersReduced
               ? Math.abs(Math.sin(elapsedSec * 7.5)) * 0.12
               : 0;
         if (techBuddyPose === 'walking' || techBuddyPose === 'running') {
@@ -5794,44 +6112,74 @@ export function buildExhibitionRoom3DScene(params: {
         }
       }
 
+      // Subtle breathing & relaxed idle posture
+      if (guideTorsoMesh) {
+        const breath = prefersReduced ? 0 : Math.sin(elapsedSec * 2.0) * 0.014;
+        guideTorsoMesh.scale.set(1.12 + breath, 1 + breath * 0.6, 0.78 + breath);
+      }
+      if (guideLeftArmMesh) {
+        guideLeftArmMesh.rotation.z = prefersReduced
+          ? 0.18
+          : 0.18 + Math.sin(elapsedSec * 1.65) * 0.035;
+      }
+
+      const activeWave = guideApproachWaveTimer > 0 || techBuddyPose === 'waving';
       if (guideRightArmPivot) {
-        if (techBuddyPose === 'waving') {
+        if (prefersReduced) {
+          guideRightArmPivot.rotation.set(-0.28, 0, visitorNear ? -1.18 : -0.82);
+        } else if (activeWave) {
+          guideRightArmPivot.rotation.x = -0.42;
           guideRightArmPivot.rotation.z =
-            -1.25 + Math.sin(elapsedSec * 5.2) * 0.28;
+            -1.32 + Math.sin(elapsedSec * 5.6) * 0.26;
         } else if (techBuddyPose === 'pointing') {
           guideRightArmPivot.rotation.z = -1.45;
           guideRightArmPivot.rotation.x = -0.55;
         } else if (techBuddyPose === 'celebrating') {
+          guideRightArmPivot.rotation.x = -0.25;
           guideRightArmPivot.rotation.z =
             -2.15 + Math.sin(elapsedSec * 8.0) * 0.25;
         } else if (techBuddyPose === 'interacting') {
+          guideRightArmPivot.rotation.x = -0.35;
           guideRightArmPivot.rotation.z =
             -1.05 + Math.sin(elapsedSec * 4.5) * 0.22;
         } else {
+          guideRightArmPivot.rotation.x = -0.28;
           guideRightArmPivot.rotation.z =
-            -0.88 + Math.sin(elapsedSec * 2.1) * 0.08;
+            -0.84 + Math.sin(elapsedSec * 1.9) * 0.065;
         }
       }
       if (guideHeadPivot) {
-        guideHeadPivot.rotation.y =
-          techBuddyPose === 'talking'
-            ? Math.sin(elapsedSec * 3.8) * 0.14
-            : Math.sin(elapsedSec * 1.1) * 0.09;
-        guideHeadPivot.position.y = 1.38 + Math.sin(elapsedSec * 2.1) * 0.008;
+        if (prefersReduced) {
+          guideHeadPivot.rotation.set(0, 0, 0);
+          guideHeadPivot.position.y = 1.38;
+        } else {
+          guideHeadPivot.rotation.y = visitorNear
+            ? Math.sin(elapsedSec * 2.2) * 0.06
+            : techBuddyPose === 'talking'
+              ? Math.sin(elapsedSec * 3.8) * 0.14
+              : Math.sin(elapsedSec * 1.05) * 0.11;
+          guideHeadPivot.rotation.x =
+            guideApproachWaveTimer > 1.2
+              ? Math.sin(elapsedSec * 4.5) * 0.07
+              : 0;
+          guideHeadPivot.position.y = 1.38 + Math.sin(elapsedSec * 2.0) * 0.008;
+        }
       }
     }
 
     // 14. Animate Cached Memory-to-3D Reconstruction Sub-Nodes (zero per-frame .traverse())
-    for (let i = 0; i < memoryTo3DObjectsRegistry.length; i++) {
-      const reg = memoryTo3DObjectsRegistry[i];
-      for (let w = 0; w < reg.wheels.length; w++) {
-        reg.wheels[w].rotation.z -= dt * 2.4;
-      }
-      for (let l = 0; l < reg.lanternOrbs.length; l++) {
-        reg.lanternOrbs[l].position.y = 0.16 + Math.sin(elapsedSec * 2.8 + i) * 0.025;
-      }
-      for (let t = 0; t < reg.toyGroups.length; t++) {
-        reg.toyGroups[t].position.y = 0.08 + Math.abs(Math.sin(elapsedSec * 5.2 + i)) * 0.015;
+    if (!prefersReduced) {
+      for (let i = 0; i < memoryTo3DObjectsRegistry.length; i++) {
+        const reg = memoryTo3DObjectsRegistry[i];
+        for (let w = 0; w < reg.wheels.length; w++) {
+          reg.wheels[w].rotation.z -= dt * 2.4;
+        }
+        for (let l = 0; l < reg.lanternOrbs.length; l++) {
+          reg.lanternOrbs[l].position.y = 0.16 + Math.sin(elapsedSec * 2.8 + i) * 0.025;
+        }
+        for (let t = 0; t < reg.toyGroups.length; t++) {
+          reg.toyGroups[t].position.y = 0.08 + Math.abs(Math.sin(elapsedSec * 5.2 + i)) * 0.015;
+        }
       }
     }
   };

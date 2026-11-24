@@ -56,8 +56,15 @@ import {
 import { museumAudioEngine } from './services/audioEngine';
 import { AtriumScene3D } from './components/AtriumScene3D';
 import { PersistentMiniPlayer } from './components/PersistentMiniPlayer';
-import { CurationStatusHUD } from './components/CurationStatusHUD';
-import { CurationBatchItemInput, CurationBatchState } from './types/curation';
+import {
+  CurationStatusHUD,
+  PlacementApprovalUpdate,
+} from './components/CurationStatusHUD';
+import {
+  CHILDHOOD_WORLD_LOCATION_CATALOGUE,
+  CurationBatchItemInput,
+  CurationBatchState,
+} from './types/curation';
 import { executeAutoCurationBatch } from './utils/curationPipeline';
 
 // Code-split heavy secondary views & modals so initial desktop startup only parses the Atrium shell
@@ -445,7 +452,7 @@ function normalizeMuseumToFourRoomsPerFloor(
 
 function getDefaultCharacterState(): CharacterState {
   return {
-    position: [0, 0, 4.8],
+    position: [0, 0, 35.5],
     rotationY: Math.PI,
     currentFloorId: 'floor-0',
     currentFloorNumber: 0,
@@ -799,16 +806,18 @@ export default function App() {
 
     async function runCompleteMemoryRestoration() {
       if (!currentUser?.id || !sessionToken) {
-        // Unauthenticated public demo mode: rehydrate only local IndexedDB blobs if any
+        // Guest / local mode: rehydrate all IndexedDB-backed uploaded photos & media across refreshes
         const updates: Record<string, string> = {};
         for (const mem of memories) {
-          if (
-            mem.id.startsWith('mem-upload-') &&
-            (!mem.customImageUrl ||
-              mem.customImageUrl.startsWith('blob:') ||
-              !mem.mediaUrl ||
-              mem.mediaUrl.startsWith('blob:'))
-          ) {
+          const needsHydration =
+            mem.customImageUrl?.startsWith('idb://') ||
+            mem.mediaUrl?.startsWith('idb://') ||
+            ((mem.id.startsWith('mem-upload-') || mem.id.startsWith('mem-auto-')) &&
+              (!mem.customImageUrl ||
+                mem.customImageUrl.startsWith('blob:') ||
+                !mem.mediaUrl ||
+                mem.mediaUrl.startsWith('blob:')));
+          if (needsHydration) {
             const dataUrl = await loadMediaFromIndexedDb(mem.id);
             if (dataUrl) updates[mem.id] = dataUrl;
           }
@@ -819,7 +828,10 @@ export default function App() {
               updates[m.id]
                 ? {
                     ...m,
-                    customImageUrl: updates[m.id],
+                    customImageUrl:
+                      (m.type || m.mediaType || 'image') === 'image'
+                        ? updates[m.id]
+                        : m.customImageUrl,
                     mediaUrl: updates[m.id],
                   }
                 : m,
@@ -849,12 +861,48 @@ export default function App() {
 
       if (cancelled || !reconciled.ok) return;
 
-      setMemories(reconciled.memories);
+      // Hydrate any idb:// references from IndexedDB into active session memory state
+      const hydrated = await Promise.all(
+        reconciled.memories.map(async (m) => {
+          if (
+            m.customImageUrl?.startsWith('idb://') ||
+            m.mediaUrl?.startsWith('idb://')
+          ) {
+            const dataUrl = await loadMediaFromIndexedDb(m.id);
+            if (dataUrl) {
+              return {
+                ...m,
+                customImageUrl:
+                  (m.type || m.mediaType || 'image') === 'image'
+                    ? dataUrl
+                    : m.customImageUrl,
+                mediaUrl: dataUrl,
+              };
+            }
+          }
+          return m;
+        }),
+      );
+
+      if (cancelled) return;
+      setMemories(hydrated);
       try {
-        localStorage.setItem(
-          keys.MEMORIES,
-          JSON.stringify(reconciled.memories),
-        );
+        const lightweight = hydrated.map((m) => ({
+          ...m,
+          customImageUrl:
+            m.customImageUrl &&
+            m.customImageUrl.startsWith('data:') &&
+            m.customImageUrl.length > 16384
+              ? `idb://${m.id}`
+              : m.customImageUrl,
+          mediaUrl:
+            m.mediaUrl &&
+            m.mediaUrl.startsWith('data:') &&
+            m.mediaUrl.length > 16384
+              ? `idb://${m.id}`
+              : m.mediaUrl,
+        }));
+        localStorage.setItem(keys.MEMORIES, JSON.stringify(lightweight));
       } catch {
         // ignore
       }
@@ -929,13 +977,28 @@ export default function App() {
   }, [rooms, scopedKeys.ROOMS, currentUser?.id]);
 
   useEffect(() => {
-    if (!currentUser?.id) return;
     try {
-      localStorage.setItem(scopedKeys.MEMORIES, JSON.stringify(memories));
+      // Never store large base64 image binaries directly in localStorage; keep idb:// pointers instead
+      const lightweight = memories.map((m) => ({
+        ...m,
+        customImageUrl:
+          m.customImageUrl &&
+          m.customImageUrl.startsWith('data:') &&
+          m.customImageUrl.length > 16384
+            ? `idb://${m.id}`
+            : m.customImageUrl,
+        mediaUrl:
+          m.mediaUrl &&
+          m.mediaUrl.startsWith('data:') &&
+          m.mediaUrl.length > 16384
+            ? `idb://${m.id}`
+            : m.mediaUrl,
+      }));
+      localStorage.setItem(scopedKeys.MEMORIES, JSON.stringify(lightweight));
     } catch {
       // ignore
     }
-  }, [memories, scopedKeys.MEMORIES, currentUser?.id]);
+  }, [memories, scopedKeys.MEMORIES]);
 
   useEffect(() => {
     try {
@@ -1771,12 +1834,17 @@ export default function App() {
     }
   };
 
-  const handleStartAutoCuration = (items: CurationBatchItemInput[]) => {
+  const handleStartAutoCuration = (
+    items: CurationBatchItemInput[],
+    options?: { explicitLocalFallback?: boolean },
+  ) => {
     lastBatchInputItemsRef.current = items;
     setCurationBatchState({
       batchId: `batch_${Date.now()}`,
       phase: 'uploading',
-      phaseLabel: 'Starting automatic curation…',
+      phaseLabel: options?.explicitLocalFallback
+        ? 'Preparing explicit local fallback…'
+        : 'Starting Gemini curation…',
       totalCount: items.length,
       completedCount: 0,
       failedCount: 0,
@@ -1785,6 +1853,8 @@ export default function App() {
         fileName: it.fileName,
         detectedMediaType: it.detectedMediaType,
         status: 'queued',
+        thumbnailUrl:
+          it.detectedMediaType === 'image' ? it.originalDataUrl : undefined,
         inputSnapshot: it,
       })),
     });
@@ -1796,6 +1866,7 @@ export default function App() {
       existingConnections: approvedConnections,
       userId: currentUser?.id || 'demo-curator',
       sessionToken,
+      explicitLocalFallback: Boolean(options?.explicitLocalFallback),
       callbacks: {
         onStateChange: (nextState) => {
           setCurationBatchState(nextState);
@@ -1808,7 +1879,10 @@ export default function App() {
           setMemories((prev) => [...addedMemories, ...prev]);
           setCollections(updatedCollections);
           if (addedConnections.length > 0) {
-            setApprovedConnections((prev: MemoryConnection[]) => [...addedConnections, ...prev]);
+            setApprovedConnections((prev: MemoryConnection[]) => [
+              ...addedConnections,
+              ...prev,
+            ]);
           }
         },
       },
@@ -1828,6 +1902,138 @@ export default function App() {
     if (retryItems.length > 0) {
       handleStartAutoCuration(retryItems);
     }
+  };
+
+  const handleSaveFailedWithLocalFallback = () => {
+    if (!curationBatchState || !lastBatchInputItemsRef.current) return;
+    const failedTempIds = new Set(
+      curationBatchState.items
+        .filter((i) => i.status === 'failed')
+        .map((i) => i.tempId),
+    );
+    const fallbackItems = lastBatchInputItemsRef.current.filter((it) =>
+      failedTempIds.has(it.tempId),
+    );
+    if (fallbackItems.length > 0) {
+      handleStartAutoCuration(fallbackItems, { explicitLocalFallback: true });
+    }
+  };
+
+  const applyPlacementApprovals = (updates: PlacementApprovalUpdate[]) => {
+    if (updates.length === 0) return;
+    const updateMap = new Map(updates.map((u) => [u.memoryId, u]));
+    const updatedForVault: Memory[] = [];
+
+    setMemories((prev) =>
+      prev.map((m) => {
+        const upd = updateMap.get(m.id);
+        if (!upd) return m;
+        const catalogEntry =
+          CHILDHOOD_WORLD_LOCATION_CATALOGUE[upd.locationId] ||
+          CHILDHOOD_WORLD_LOCATION_CATALOGUE.keepsake_corner;
+        const cleanTitle = (upd.title ?? m.title).trim() || m.title;
+        const cleanDesc = (upd.description ?? m.description).trim() || m.description;
+        const cleanDate = (upd.date ?? m.date).trim();
+        const yearMatch = cleanDate.match(/(\d{4})/);
+        const nextMem: Memory = {
+          ...m,
+          roomId: 'childhood',
+          title: cleanTitle,
+          description: cleanDesc,
+          date: cleanDate,
+          year: yearMatch ? Number(yearMatch[1]) : m.year,
+          subtitle: upd.moveToUnsorted
+            ? `${catalogEntry.label} (Unsorted)`
+            : catalogEntry.label,
+          location: catalogEntry.label,
+          curatedZoneId: catalogEntry.id,
+          placementTarget: catalogEntry.placementTarget,
+          linkedSpaceId: catalogEntry.spaceId,
+          linkedObjectId: catalogEntry.linkedObjectId,
+          hiddenFrom3D: false,
+          curationReport: m.curationReport
+            ? {
+                ...m.curationReport,
+                recommendedRoomId: 'childhood',
+                recommendedLocationId: catalogEntry.id,
+                recommendedDisplayObject: catalogEntry.linkedObjectId,
+                autoPlacedIn3D: true,
+              }
+            : m.curationReport,
+          memoryTo3DBlueprint: m.memoryTo3DBlueprint
+            ? {
+                ...m.memoryTo3DBlueprint,
+                connectedSpace: catalogEntry.spaceId,
+                linkedObjectId:
+                  catalogEntry.linkedObjectId ??
+                  m.memoryTo3DBlueprint.linkedObjectId,
+                userApprovalStatus: 'approved',
+              }
+            : m.memoryTo3DBlueprint,
+          updatedAt: new Date().toISOString(),
+        };
+        updatedForVault.push(nextMem);
+        return nextMem;
+      }),
+    );
+
+    const activeUserId = currentUser?.id || 'demo-curator';
+    updatedForVault.forEach((mem) => {
+      void syncMemoryRecordToVault(
+        { ...mem, userId: activeUserId },
+        activeUserId,
+        sessionToken,
+      ).catch(() => {});
+    });
+
+    setCurationBatchState((prev) => {
+      if (!prev) return prev;
+      const nextItems = prev.items.map((it) => {
+        const upd = it.memoryId ? updateMap.get(it.memoryId) : undefined;
+        if (!upd) return it;
+        const cat =
+          CHILDHOOD_WORLD_LOCATION_CATALOGUE[upd.locationId] ||
+          CHILDHOOD_WORLD_LOCATION_CATALOGUE.keepsake_corner;
+        return {
+          ...it,
+          locationId: cat.id,
+          locationLabel: cat.label,
+          suggestedTitle: upd.title ?? it.suggestedTitle,
+          suggestedDescription: upd.description ?? it.suggestedDescription,
+          suggestedDate: upd.date ?? it.suggestedDate,
+          isUnsorted: Boolean(upd.moveToUnsorted),
+          placementApproved: true,
+        };
+      });
+      const stillPending = nextItems.some(
+        (it) => it.status === 'done' && !it.placementApproved,
+      );
+      return {
+        ...prev,
+        phase: stillPending ? 'review' : 'ready',
+        phaseLabel: stillPending
+          ? 'Review remaining 3D placements'
+          : 'Placed in 3D Childhood Memory Park',
+        items: nextItems,
+      };
+    });
+
+    emitNotification(
+      `placement-approved-${Date.now()}`,
+      updates.length === 1
+        ? 'Photo Placed in 3D Childhood Park'
+        : `${updates.length} Memories Placed in 3D Park`,
+      'Approved placement saved and mounted in your 3D Childhood Memory Park.',
+      'important',
+    );
+  };
+
+  const handleApproveItemPlacement = (update: PlacementApprovalUpdate) => {
+    applyPlacementApprovals([update]);
+  };
+
+  const handleApproveAllPlacements = (updates: PlacementApprovalUpdate[]) => {
+    applyPlacementApprovals(updates);
   };
 
   const handleUndoCurationBatch = () => {
@@ -3078,7 +3284,11 @@ export default function App() {
           setActiveNav('collections');
         }}
         onRetryFailed={handleRetryFailedCuration}
+        onSaveWithLocalFallback={handleSaveFailedWithLocalFallback}
         onUndoLastBatch={handleUndoCurationBatch}
+        onApproveItemPlacement={handleApproveItemPlacement}
+        onApproveAllPlacements={handleApproveAllPlacements}
+        onEnterChildhoodPark={() => handleEnterRoom('childhood')}
       />
 
       <ResetMuseumConfirmModal

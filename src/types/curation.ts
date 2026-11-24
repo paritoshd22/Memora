@@ -209,12 +209,14 @@ export interface MemoryAnalysisReport {
 export type CurationLifecyclePhase =
   | 'idle'
   | 'uploading'
+  | 'preserving_original'
   | 'analysing'
   | 'organising'
   | 'finding_related'
   | 'linking'
   | 'preparing_collections'
   | 'assigning_locations'
+  | 'review'
   | 'preparing'
   | 'ready'
   | 'error';
@@ -235,6 +237,9 @@ export interface CurationBatchItemInput {
   rawTextContent?: string;
   documentBase64?: string;
   captureSource?: 'upload' | 'camera' | 'written';
+  userTitle?: string;
+  userDescription?: string;
+  userDate?: string;
 }
 
 export interface CurationBatchItemStatus {
@@ -244,7 +249,20 @@ export interface CurationBatchItemStatus {
   status: 'queued' | 'processing' | 'done' | 'failed';
   memoryId?: string;
   collectionTitle?: string;
+  locationId?: ChildhoodWorldLocationId;
   locationLabel?: string;
+  suggestedTitle?: string;
+  suggestedDescription?: string;
+  suggestedDate?: string;
+  recommendedReason?: string;
+  confidenceScore?: number;
+  analyzedBy?: 'gemini' | 'deterministic_fallback';
+  modelUsed?: string;
+  isDemo?: boolean;
+  isUnsorted?: boolean;
+  warnings?: string[];
+  thumbnailUrl?: string;
+  placementApproved?: boolean;
   errorMessage?: string;
   inputSnapshot: CurationBatchItemInput;
 }

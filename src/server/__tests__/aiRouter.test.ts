@@ -1095,7 +1095,326 @@ async function runTests() {
     passed++;
   }
 
-  console.log(`\n🎉 All ${passed}/18 AI Provider, Memory-to-3D, Persistence & Security tests passed!`);
+  // 19. Test: Real Server-Side Gemini Curation Service (Consistent Model IDs, Consent, All 6 States & Zero Silent Fallback)
+  {
+    const { GEMINI_MODELS } = await import('../geminiConfig');
+    const { MemoryCurationService } = await import('../memoryCurationService');
+    const { GeminiProviderAdapter } = await import('../aiProviders');
+
+    const prevKey = process.env.GEMINI_API_KEY;
+    try {
+      // 19a. Missing API key -> honest missing_credentials state, never fakes Gemini analysis
+      delete process.env.GEMINI_API_KEY;
+      const adapterNoKey = new GeminiProviderAdapter();
+      const serviceNoKey = new MemoryCurationService();
+      assert.equal(adapterNoKey.getStatus().models.textModel, GEMINI_MODELS.primary);
+      assert.equal(adapterNoKey.getStatus().models.visionModel, GEMINI_MODELS.vision);
+      assert.equal(serviceNoKey.getStatus().model, GEMINI_MODELS.curation);
+      assert.equal(GEMINI_MODELS.primary, 'gemini-4-hydrogen');
+      assert.equal(serviceNoKey.getStatus().connectionStatus, 'missing_credentials');
+
+      const missingRes = await serviceNoKey.analyzeItem({
+        fileName: 'backyard_swing.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(missingRes.ok, false);
+      assert.equal(missingRes.code, 'MISSING_CREDENTIALS');
+      assert.equal(missingRes.analyzedBy, 'none');
+      assert.equal(missingRes.connectionStatus, 'missing_credentials');
+
+      // 19b. Consent denied -> rejected even when API key is configured
+      process.env.GEMINI_API_KEY = 'AIzaSyTestValidKeyLength1234567890abcdef';
+      const serviceWithStub = new MemoryCurationService({
+        executeModel: async () =>
+          JSON.stringify({
+            title: 'Should Not Run',
+            summary: 'Should not execute without consent.',
+            storyDraft: '',
+            verifiedFacts: [],
+            aiInferences: [],
+            detectedEntities: [],
+            tags: [],
+            emotionTags: [],
+            recommendedLocationId: 'childhood',
+            placementReason: 'n/a',
+            displayRecommendation: 'frame',
+            confidenceScore: 0.9,
+            uncertainties: [],
+          }),
+      });
+      const noConsentRes = await serviceWithStub.analyzeItem({
+        fileName: 'family_picnic.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: false,
+      });
+      assert.equal(noConsentRes.ok, false);
+      assert.equal(noConsentRes.code, 'CONSENT_REQUIRED');
+
+      // 19c. Valid live Gemini JSON response -> ok: true, analyzedBy: 'gemini', modelUsed matches GEMINI_MODELS.curation
+      const statusEvents: string[] = [];
+      const serviceSuccess = new MemoryCurationService({
+        onStatusUpdate: (status) => statusEvents.push(status),
+        executeModel: async ({ model }) => {
+          assert.equal(model, GEMINI_MODELS.curation);
+          return JSON.stringify({
+            suggestedTitle: 'Afternoon Backyard Swing',
+            suggestedDescription: 'A sunlit wooden swing beneath garden trees.',
+            suggestedDate: '',
+            suggestedLocation: '',
+            suggestedTags: ['backyard', 'swing'],
+            suggestedPeople: [],
+            mainSubject: 'Wooden backyard swing',
+            eventContext: 'Outdoor afternoon play',
+            detectedObjects: ['swing', 'trees'],
+            detectedActivities: ['playing outdoors'],
+            sceneCues: ['sunlit yard'],
+            extractedText: '',
+            explicitDates: [],
+            topics: ['childhood play'],
+            verifiedFacts: ['File uploaded: backyard_swing.jpg'],
+            aiInferences: ['Outdoor sunlit garden setting visible in image'],
+            uncertainInfo: ['Date and people are not confirmed in the uploaded file.'],
+            recommendedLocationId: 'backyard',
+            recommendedReason: 'Visible outdoor play scene matches Backyard & Playgrounds.',
+            confidenceScore: 0.88,
+          });
+        },
+      });
+      const okRes = await serviceSuccess.analyzeItem({
+        fileName: 'backyard_swing.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+        existingSpaces: [{ id: 'childhood', name: 'Childhood World', category: 'Childhood' }],
+      });
+      assert.equal(okRes.ok, true);
+      assert.equal(okRes.analyzedBy, 'gemini');
+      assert.equal(okRes.modelUsed, 'gemini-4-hydrogen');
+      assert.equal(okRes.isDemo, false);
+      assert.equal(okRes.isUnsorted, false);
+      assert.equal(okRes.connectionStatus, 'connected');
+      assert.equal(okRes.report?.recommendedLocationId, 'backyard');
+      assert.equal(okRes.suggestedTitle, 'Afternoon Backyard Swing');
+      assert.ok(statusEvents.includes('connected'));
+
+      // 19c-ii. User-provided title/description/date take priority over AI suggestions without being overwritten
+      const userHintRes = await serviceSuccess.analyzeItem({
+        fileName: 'backyard_swing.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+        userTitle: 'Grandpa’s Oak Swing',
+        userDescription: 'Our backyard oak tree after rain.',
+        userDate: 'Summer 1999',
+      });
+      assert.equal(userHintRes.ok, true);
+      assert.equal(userHintRes.suggestedTitle, 'Grandpa’s Oak Swing');
+      assert.equal(userHintRes.suggestedDescription, 'Our backyard oak tree after rain.');
+      assert.equal(userHintRes.suggestedDate, 'Summer 1999');
+
+      // 19d. Auth failure (401) -> AUTHENTICATION_FAILED / auth_failed
+      const serviceAuthFail = new MemoryCurationService({
+        executeModel: async () => {
+          const err: any = new Error('API key not valid');
+          err.status = 401;
+          throw err;
+        },
+      });
+      const authRes = await serviceAuthFail.analyzeItem({
+        fileName: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(authRes.ok, false);
+      assert.equal(authRes.code, 'AUTHENTICATION_FAILED');
+      assert.equal(authRes.connectionStatus, 'auth_failed');
+
+      // 19e. Rate limit (429) -> RATE_LIMITED / rate_limited
+      const serviceRateLimit = new MemoryCurationService({
+        executeModel: async () => {
+          const err: any = new Error('RESOURCE_EXHAUSTED quota exceeded');
+          err.status = 429;
+          throw err;
+        },
+      });
+      const rateRes = await serviceRateLimit.analyzeItem({
+        fileName: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(rateRes.ok, false);
+      assert.equal(rateRes.code, 'RATE_LIMITED');
+      assert.equal(rateRes.connectionStatus, 'rate_limited');
+
+      // 19f. Provider unavailable (503) -> PROVIDER_UNAVAILABLE / provider_unavailable
+      const serviceUnavailable = new MemoryCurationService({
+        executeModel: async () => {
+          const err: any = new Error('503 Service Unavailable');
+          err.status = 503;
+          throw err;
+        },
+      });
+      const unavailRes = await serviceUnavailable.analyzeItem({
+        fileName: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(unavailRes.ok, false);
+      assert.equal(unavailRes.code, 'PROVIDER_UNAVAILABLE');
+      assert.equal(unavailRes.connectionStatus, 'provider_unavailable');
+
+      // 19g. Invalid / non-JSON AI response -> INVALID_AI_RESPONSE / invalid_response (never silently falls back)
+      const serviceInvalidJson = new MemoryCurationService({
+        executeModel: async () => 'Sorry, I cannot output JSON right now.',
+      });
+      const invalidRes = await serviceInvalidJson.analyzeItem({
+        fileName: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(invalidRes.ok, false);
+      assert.equal(invalidRes.code, 'INVALID_AI_RESPONSE');
+      assert.equal(invalidRes.connectionStatus, 'invalid_response');
+      assert.equal(invalidRes.analyzedBy, 'none');
+
+      // 19h. Request timeout -> PROVIDER_UNAVAILABLE, retryable: true
+      const serviceTimeout = new MemoryCurationService({
+        timeoutMs: 25,
+        executeModel: () => new Promise<string>(() => {}),
+      });
+      const timeoutRes = await serviceTimeout.analyzeItem({
+        fileName: 'slow_photo.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(timeoutRes.ok, false);
+      assert.equal(timeoutRes.code, 'PROVIDER_UNAVAILABLE');
+      assert.equal(timeoutRes.retryable, true);
+      assert.equal(timeoutRes.connectionStatus, 'provider_unavailable');
+
+      // 19i. Low-confidence (< 0.55) -> routed to keepsake_corner with isUnsorted: true and warning
+      const serviceLowConf = new MemoryCurationService({
+        executeModel: async () =>
+          JSON.stringify({
+            suggestedTitle: 'Blurry Snapshot',
+            suggestedDescription: 'An indistinct photograph with low visual clarity.',
+            recommendedLocationId: 'treehouse',
+            recommendedReason: 'Unclear outdoor background.',
+            confidenceScore: 0.32,
+            verifiedFacts: ['Uploaded image file received.'],
+          }),
+      });
+      const lowConfRes = await serviceLowConf.analyzeItem({
+        fileName: 'blurry.jpg',
+        mimeType: 'image/jpeg',
+        mediaType: 'photo',
+        consentGranted: true,
+      });
+      assert.equal(lowConfRes.ok, true);
+      assert.equal(lowConfRes.isUnsorted, true);
+      assert.equal(lowConfRes.report?.recommendedLocationId, 'keepsake_corner');
+      assert.ok(lowConfRes.warnings.some((w) => w.toLowerCase().includes('low analysis confidence')));
+
+      // 19j. Unsupported media/location pairing -> auto-corrected by validateLocationPlacement with warning
+      const serviceMismatch = new MemoryCurationService({
+        executeModel: async () =>
+          JSON.stringify({
+            suggestedTitle: 'Cassette Voice Note',
+            suggestedDescription: 'A childhood voice recording.',
+            recommendedLocationId: 'bicycle_trail',
+            recommendedReason: 'Outdoor sounds.',
+            confidenceScore: 0.85,
+            verifiedFacts: ['Audio clip uploaded.'],
+          }),
+      });
+      const mismatchRes = await serviceMismatch.analyzeItem({
+        fileName: 'lullaby.mp3',
+        mimeType: 'audio/mpeg',
+        mediaType: 'audio',
+        consentGranted: true,
+      });
+      assert.equal(mismatchRes.ok, true);
+      assert.notEqual(mismatchRes.report?.recommendedLocationId, 'bicycle_trail');
+      assert.ok(mismatchRes.warnings.length > 0);
+    } finally {
+      if (prevKey === undefined) {
+        delete process.env.GEMINI_API_KEY;
+      } else {
+        process.env.GEMINI_API_KEY = prevKey;
+      }
+    }
+
+    console.log('✅ Test 19 Passed: Real Gemini Curation Service verified across all 6 connection states, consent gating, timeout, low-confidence routing, media validation, user context preservation, and zero silent fallback.');
+    passed++;
+  }
+
+  // 20. Test: 3D Childhood World Placement Resolver (All 9 Locations, Multi-Photo Spacing & Overflow Routing)
+  {
+    const { CHILDHOOD_WORLD_LOCATION_CATALOGUE } = await import('../../types/curation');
+    const { resolve3DPlacementPosition } = await import('../../utils/roomExhibition3D');
+
+    const allLocationIds = Object.keys(CHILDHOOD_WORLD_LOCATION_CATALOGUE) as Array<
+      keyof typeof CHILDHOOD_WORLD_LOCATION_CATALOGUE
+    >;
+    assert.equal(allLocationIds.length, 9);
+
+    const fallback = { x: 0, y: 1.5, z: 0, rotY: 0 };
+    const slot0Coords: Array<{ id: string; x: number; y: number; z: number }> = [];
+
+    for (const locId of allLocationIds) {
+      const p0 = resolve3DPlacementPosition({ curatedZoneId: locId }, 0, fallback);
+      const p1 = resolve3DPlacementPosition({ curatedZoneId: locId }, 1, fallback);
+      const p2 = resolve3DPlacementPosition({ curatedZoneId: locId }, 2, fallback);
+
+      // Coordinates must be finite numbers and mapped to the exact zone
+      for (const p of [p0, p1, p2]) {
+        assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
+        assert.equal(p.zoneKey, locId);
+      }
+
+      // Multiple photos in the same zone must NOT overlap
+      const dist01 = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+      const dist12 = Math.hypot(p2.x - p1.x, p2.y - p1.y, p2.z - p1.z);
+      assert.ok(dist01 > 0.5, `Zone ${locId} slot 0 and 1 overlapped (dist=${dist01})`);
+      assert.ok(dist12 > 0.5, `Zone ${locId} slot 1 and 2 overlapped (dist=${dist12})`);
+
+      slot0Coords.push({ id: locId, x: p0.x, y: p0.y, z: p0.z });
+    }
+
+    // All 9 locations must have distinct primary coordinates (no two zones stacked on each other)
+    for (let i = 0; i < slot0Coords.length; i++) {
+      for (let j = i + 1; j < slot0Coords.length; j++) {
+        const a = slot0Coords[i];
+        const b = slot0Coords[j];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+        assert.ok(
+          dist > 0.8,
+          `Zones ${a.id} and ${b.id} are too close or overlapping (dist=${dist})`,
+        );
+      }
+    }
+
+    // Overflow beyond slot 5 (>= 6) routes cleanly to perimeter meadow gallery without overlapping
+    const ov6 = resolve3DPlacementPosition({ curatedZoneId: 'backyard' }, 6, fallback);
+    const ov7 = resolve3DPlacementPosition({ curatedZoneId: 'backyard' }, 7, fallback);
+    assert.equal(ov6.zoneKey, 'backyard_overflow');
+    assert.equal(ov7.zoneKey, 'backyard_overflow');
+    assert.equal(ov6.needsEaselStand, true);
+    assert.ok(Math.hypot(ov7.x - ov6.x, ov7.z - ov6.z) > 1.0);
+
+    console.log('✅ Test 20 Passed: resolve3DPlacementPosition covers all 9 Childhood World locations with zero overlap and overflow routing.');
+    passed++;
+  }
+
+  console.log(`\n🎉 All ${passed}/20 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
 }
 
 runTests().catch((err) => {

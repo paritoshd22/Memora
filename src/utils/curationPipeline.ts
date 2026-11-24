@@ -1,5 +1,6 @@
 import {
   CHILDHOOD_WORLD_LOCATION_CATALOGUE,
+  ChildhoodWorldLocationId,
   CurationBatchItemInput,
   CurationBatchItemStatus,
   CurationBatchState,
@@ -39,8 +40,9 @@ function buildMemoryFromAnalyzedItem(params: {
   analysisRes: any;
   ownerId: string;
   orderIndex: number;
+  awaitingApproval?: boolean;
 }): Memory {
-  const { item, analysisRes, ownerId, orderIndex } = params;
+  const { item, analysisRes, ownerId, orderIndex, awaitingApproval = true } = params;
   const memId = `mem-auto-${Date.now()}-${orderIndex}-${Math.random().toString(36).slice(2, 6)}`;
   const report =
     analysisRes?.report ||
@@ -61,7 +63,9 @@ function buildMemoryFromAnalyzedItem(params: {
       ? parseChatExportText(item.rawTextContent, item.fileName)
       : undefined;
 
-  const yearMatch = (analysisRes?.suggestedDate || '').match(/^(\d{4})/);
+  const userOrSuggestedDate =
+    (item.userDate || '').trim() || (analysisRes?.suggestedDate || '').trim();
+  const yearMatch = userOrSuggestedDate.match(/(\d{4})/);
   const explicitDateMatch = (report.explicitDates?.[0] || '').match(/(\d{4})/);
   const yearNum = yearMatch
     ? Number(yearMatch[1])
@@ -70,6 +74,7 @@ function buildMemoryFromAnalyzedItem(params: {
       : new Date().getFullYear();
 
   const mediaTitle =
+    (item.userTitle || '').trim() ||
     (analysisRes?.suggestedTitle || '').trim() ||
     item.fileName.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
     'Uploaded Memory';
@@ -83,12 +88,9 @@ function buildMemoryFromAnalyzedItem(params: {
     sourceMediaId: memId,
     promptText: `${item.fileName} ${mediaTitle} ${analysisRes?.suggestedDescription || ''}`,
     mediaType: item.detectedMediaType,
-    defaultApprovalStatus: report.sensitiveReconstructionRequiresApproval
-      ? 'pending'
-      : 'approved',
+    defaultApprovalStatus: awaitingApproval ? 'pending' : 'approved',
   });
 
-  // Align blueprint space cleanly with validated Childhood world placement
   blueprint.connectedSpace = placement.catalogEntry.spaceId;
   if (placement.catalogEntry.linkedObjectId) {
     blueprint.linkedObjectId = placement.catalogEntry.linkedObjectId;
@@ -106,7 +108,7 @@ function buildMemoryFromAnalyzedItem(params: {
     mediaMimeType: item.mimeType,
     mediaFileName: item.fileName,
     customImageUrl,
-    date: analysisRes?.suggestedDate || '',
+    date: userOrSuggestedDate,
     year: yearNum,
     location:
       (analysisRes?.suggestedLocation || '').trim() ||
@@ -128,6 +130,7 @@ function buildMemoryFromAnalyzedItem(params: {
                 ? 'Story'
                 : 'Photo',
     description:
+      (item.userDescription || '').trim() ||
       (analysisRes?.suggestedDescription || '').trim() ||
       `Original ${item.detectedMediaType} preserved automatically in MEMORA.`,
     story:
@@ -163,7 +166,8 @@ function buildMemoryFromAnalyzedItem(params: {
     aiSummary: report.recommendedReason,
     placementTarget: placement.catalogEntry.placementTarget,
     curatedZoneId: placement.locationId,
-    hiddenFrom3D: false,
+    // Keep hidden in 3D until the visitor approves placement in the review step
+    hiddenFrom3D: awaitingApproval,
     curationReport: report,
     memoryTo3DBlueprint: blueprint,
     linkedSpaceId: placement.catalogEntry.spaceId,
@@ -176,7 +180,9 @@ function buildMemoryFromAnalyzedItem(params: {
 /**
  * Runs non-blocking automatic background curation across all uploaded items.
  * Preserves original uploaded files in IndexedDB immediately before any AI call,
- * transitions transparently through lifecycle phases, and exposes per-item failures for retry.
+ * calls the live server-side Gemini endpoint (/api/curation/analyze-item),
+ * never silently substitutes demo/fallback output for Gemini, and pauses at the
+ * interactive Placement Review step so only user-approved placements enter 3D.
  */
 export async function executeAutoCurationBatch(params: {
   items: CurationBatchItemInput[];
@@ -185,6 +191,7 @@ export async function executeAutoCurationBatch(params: {
   existingConnections: MemoryConnection[];
   userId: string;
   sessionToken?: string | null;
+  explicitLocalFallback?: boolean;
   callbacks: RunCurationBatchCallbacks;
 }): Promise<CurationBatchState> {
   const {
@@ -194,6 +201,7 @@ export async function executeAutoCurationBatch(params: {
     existingConnections,
     userId,
     sessionToken,
+    explicitLocalFallback = false,
     callbacks,
   } = params;
 
@@ -203,6 +211,7 @@ export async function executeAutoCurationBatch(params: {
     fileName: it.fileName,
     detectedMediaType: it.detectedMediaType,
     status: 'queued',
+    thumbnailUrl: it.detectedMediaType === 'image' ? it.originalDataUrl : undefined,
     inputSnapshot: it,
   }));
 
@@ -225,7 +234,6 @@ export async function executeAutoCurationBatch(params: {
 
   emitState({ phase: 'uploading', phaseLabel: 'Uploading memories securely…' });
 
-  // Save Undo snapshot before adding batch results
   const undoSnapshot: CurationUndoSnapshot = {
     batchId,
     createdAt: new Date().toISOString(),
@@ -244,8 +252,19 @@ export async function executeAutoCurationBatch(params: {
       .filter(Boolean),
   );
 
-  // Phase 2: Analysing each item via server-side Gemini endpoint
-  emitState({ phase: 'analysing', phaseLabel: 'Analysing with Gemini…' });
+  // Stage 2: Preserve originals safely before analysis
+  emitState({
+    phase: 'preserving_original',
+    phaseLabel: 'Preserving original media untouched…',
+  });
+
+  // Stage 3: Live Gemini analysis (or explicit user-requested local fallback)
+  emitState({
+    phase: 'analysing',
+    phaseLabel: explicitLocalFallback
+      ? 'Preparing explicit local fallback (Non-Gemini)…'
+      : 'Analysing with Gemini…',
+  });
 
   for (let idx = 0; idx < items.length; idx++) {
     const item = items[idx];
@@ -265,22 +284,63 @@ export async function executeAutoCurationBatch(params: {
     itemStatuses[idx].status = 'processing';
     emitState({
       phase: 'analysing',
-      phaseLabel: `Analysing (${idx + 1}/${items.length}): ${item.fileName}`,
+      phaseLabel: explicitLocalFallback
+        ? `Preparing local fallback (${idx + 1}/${items.length}): ${item.fileName}`
+        : `Analysing with Gemini (${idx + 1}/${items.length}): ${item.fileName}`,
     });
 
     try {
-      const resp = await fetch('/api/curation/analyze-item', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item }),
-      });
-      const json = await resp.json();
+      let json: any = null;
 
-      if (!resp.ok || !json?.ok) {
-        itemStatuses[idx].status = 'failed';
-        itemStatuses[idx].errorMessage =
-          json?.message || 'Gemini analysis failed. You can retry without re-uploading.';
-        continue;
+      if (explicitLocalFallback) {
+        const fallbackReport = buildGroundedFallbackReport({
+          mediaCategory: item.detectedMediaType,
+          fileName: item.fileName,
+          rawTextContent: item.rawTextContent,
+          videoDurationSeconds: item.videoDurationSeconds,
+        });
+        fallbackReport.analyzedBy = 'deterministic_fallback';
+        fallbackReport.confidenceScore = 0.48;
+        fallbackReport.recommendedLocationId = 'keepsake_corner';
+        fallbackReport.recommendedReason =
+          'Saved via explicit Local Fallback (Non-Gemini). Please choose your preferred Childhood Park location below.';
+        json = {
+          ok: true,
+          analyzedBy: 'deterministic_fallback',
+          isDemo: true,
+          isUnsorted: true,
+          confidenceScore: 0.48,
+          warnings: [
+            'Analyzed locally without Gemini (explicit fallback). Original media is preserved untouched.',
+          ],
+          suggestedTitle:
+            (item.userTitle || '').trim() ||
+            item.fileName.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
+            'Uploaded Memory',
+          suggestedDescription:
+            (item.userDescription || '').trim() ||
+            `Original ${item.detectedMediaType} preserved locally without Gemini AI.`,
+          suggestedDate: (item.userDate || '').trim(),
+          report: fallbackReport,
+        };
+      } else {
+        const resp = await fetch('/api/curation/analyze-item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item,
+            consentGranted: true,
+          }),
+        });
+        json = await resp.json().catch(() => null);
+
+        if (!resp.ok || !json?.ok || json?.analyzedBy !== 'gemini' || !json?.report) {
+          itemStatuses[idx].status = 'failed';
+          const codeTag = json?.code ? `[${json.code}] ` : '';
+          itemStatuses[idx].errorMessage =
+            `${codeTag}${json?.message || 'Live Gemini analysis did not complete. Your original file is preserved for retry.'}`;
+          continue;
+        }
       }
 
       const mem = buildMemoryFromAnalyzedItem({
@@ -288,9 +348,10 @@ export async function executeAutoCurationBatch(params: {
         analysisRes: json,
         ownerId: userId,
         orderIndex: idx,
+        awaitingApproval: true,
       });
 
-      // Immediately store untouched original media in IndexedDB & sync metadata
+      // Immediately store untouched original media in IndexedDB (never large binaries in localStorage)
       if (item.originalDataUrl) {
         const domain =
           item.detectedMediaType === 'video'
@@ -310,10 +371,29 @@ export async function executeAutoCurationBatch(params: {
       }
       addedMemories.push(mem);
       undoSnapshot.createdMemoryIds.push(mem.id);
+
+      const zoneId: ChildhoodWorldLocationId =
+        mem.curatedZoneId || 'keepsake_corner';
       itemStatuses[idx].status = 'done';
       itemStatuses[idx].memoryId = mem.id;
+      itemStatuses[idx].locationId = zoneId;
       itemStatuses[idx].locationLabel =
-        CHILDHOOD_WORLD_LOCATION_CATALOGUE[mem.curatedZoneId || 'keepsake_corner']?.label;
+        CHILDHOOD_WORLD_LOCATION_CATALOGUE[zoneId]?.label;
+      itemStatuses[idx].suggestedTitle = mem.title;
+      itemStatuses[idx].suggestedDescription = mem.description;
+      itemStatuses[idx].suggestedDate = mem.date;
+      itemStatuses[idx].recommendedReason = mem.curationReport?.recommendedReason;
+      itemStatuses[idx].confidenceScore =
+        typeof json?.confidenceScore === 'number'
+          ? json.confidenceScore
+          : mem.curationReport?.confidenceScore;
+      itemStatuses[idx].analyzedBy =
+        json?.analyzedBy === 'gemini' ? 'gemini' : 'deterministic_fallback';
+      itemStatuses[idx].modelUsed = json?.modelUsed;
+      itemStatuses[idx].isDemo = Boolean(json?.isDemo);
+      itemStatuses[idx].isUnsorted = Boolean(json?.isUnsorted);
+      itemStatuses[idx].warnings = Array.isArray(json?.warnings) ? json.warnings : [];
+      itemStatuses[idx].placementApproved = false;
     } catch (err: any) {
       itemStatuses[idx].status = 'failed';
       itemStatuses[idx].errorMessage =
@@ -324,14 +404,14 @@ export async function executeAutoCurationBatch(params: {
   if (addedMemories.length === 0) {
     return emitState({
       phase: 'error',
-      phaseLabel: 'Analysis interrupted — uploaded files kept ready to retry',
+      phaseLabel: 'Gemini analysis unavailable — originals preserved for retry',
       errorBannerMessage:
         itemStatuses[0]?.errorMessage ||
-        'Gemini could not analyse the uploaded items right now. Click Retry to try again.',
+        'Gemini could not analyse the uploaded items right now. Click Retry, or choose Save with Local Fallback (Non-Gemini).',
     });
   }
 
-  // Phase 3: Organising into evidence-backed collections
+  // Stage 4: Organising into evidence-backed collections
   emitState({
     phase: 'organising',
     phaseLabel: 'Organising…',
@@ -353,32 +433,25 @@ export async function executeAutoCurationBatch(params: {
     });
     const orgJson = await orgResp.json();
 
-    // Phase 4: Finding related memories
+    // Stage 5: Finding related memories
     emitState({
       phase: 'finding_related',
       phaseLabel: 'Finding related memories…',
     });
 
     if (orgJson?.ok && Array.isArray(orgJson.collections)) {
-      // Phase 5: Preparing collections
-      emitState({
-        phase: 'preparing_collections',
-        phaseLabel: 'Preparing collections…',
-      });
-
       updatedCollections = orgJson.collections;
       const existingColIds = new Set(existingCollections.map((c) => c.id));
       undoSnapshot.createdCollectionIds = updatedCollections
         .filter((c) => !existingColIds.has(c.id))
         .map((c) => c.id);
 
-      // Phase 6: Assigning museum locations
+      // Stage 6: Suggesting museum locations
       emitState({
         phase: 'assigning_locations',
-        phaseLabel: 'Assigning museum locations…',
+        phaseLabel: 'Suggesting Childhood Park locations…',
       });
 
-      // Apply validated batch placements back onto added memories
       if (Array.isArray(orgJson.placements)) {
         const placementByMem = new Map<string, string>(
           orgJson.placements.map((p: any) => [p.memoryId, p.locationId]),
@@ -395,6 +468,11 @@ export async function executeAutoCurationBatch(params: {
             mem.linkedSpaceId = validated.catalogEntry.spaceId;
             mem.linkedObjectId = validated.catalogEntry.linkedObjectId;
             mem.subtitle = validated.catalogEntry.label;
+            const st = itemStatuses.find((s) => s.memoryId === mem.id);
+            if (st) {
+              st.locationId = validated.locationId;
+              st.locationLabel = validated.catalogEntry.label;
+            }
           }
         }
       }
@@ -413,7 +491,6 @@ export async function executeAutoCurationBatch(params: {
         );
       }
     } else {
-      // Fallback: ensure newly added memories are placed in Unsorted Memories
       updatedCollections = sanitizeAndOrganizeCollections({
         proposedCollections: [],
         memories: combinedMemories,
@@ -421,7 +498,6 @@ export async function executeAutoCurationBatch(params: {
       });
     }
   } catch {
-    // Even if organizing hits a transient error, place analysed memories safely into Unsorted Memories
     updatedCollections = sanitizeAndOrganizeCollections({
       proposedCollections: [],
       memories: combinedMemories,
@@ -429,7 +505,6 @@ export async function executeAutoCurationBatch(params: {
     });
   }
 
-  // Attach collectionIds back to memories & annotate status items
   for (const mem of addedMemories) {
     const matchingCols = updatedCollections.filter((c) =>
       c.memoryIds.includes(mem.id),
@@ -440,12 +515,6 @@ export async function executeAutoCurationBatch(params: {
       st.collectionTitle = matchingCols[0].title;
     }
   }
-
-  // Phase 7: Preparing 3D interactions & syncing vault
-  emitState({
-    phase: 'preparing',
-    phaseLabel: 'Preparing interactions…',
-  });
 
   for (const mem of addedMemories) {
     await syncMemoryRecordToVault(
@@ -464,7 +533,7 @@ export async function executeAutoCurationBatch(params: {
     sessionToken,
   ).catch(() => {});
 
-  // Commit to app state
+  // Commit draft memories (hiddenFrom3D: true until user approves in Placement Review)
   callbacks.onMemoriesAndCollectionsReady({
     addedMemories,
     updatedCollections,
@@ -479,11 +548,12 @@ export async function executeAutoCurationBatch(params: {
 
   const hasFailures = itemStatuses.some((s) => s.status === 'failed');
 
+  // Stage 7: Interactive Placement Review — user edits/approves before 3D display becomes permanent
   return emitState({
-    phase: hasFailures ? 'error' : 'ready',
+    phase: 'review',
     phaseLabel: hasFailures
-      ? 'Partially curated — retry failed items anytime'
-      : 'Ready to explore in MEMORA',
+      ? 'Review placements — failed items kept ready to retry'
+      : 'Review & approve 3D Childhood Park placement',
     primaryReadyCollectionId: primaryCol?.id,
     primaryReadyCollectionTitle: primaryCol?.title,
     errorBannerMessage: hasFailures

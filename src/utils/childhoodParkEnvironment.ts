@@ -32,6 +32,9 @@ export function buildChildhoodParkEnvironment({
   const pathEdgeMat = mat('#BBA17C', 0.94);
   const woodMat = mat('#76543A', 0.78);
   const woodLightMat = mat('#B88958', 0.78);
+  const brassMat = mat('#C9A66B', 0.36, { metalness: 0.72 });
+  const ivoryMat = mat('#F4EBDC', 0.84);
+  const sageMat = mat('#6F8769', 0.88);
   const leafMat = mat('#54734F', 0.96);
   const leafLightMat = mat('#78976B', 0.96);
   const flowerGoldMat = mat('#E7B85F', 0.72);
@@ -136,8 +139,51 @@ export function buildChildhoodParkEnvironment({
   ground.receiveShadow = enableShadows;
   park.add(ground);
 
+  // Helper to lay flat, walkable curving gravel branch ribbons connecting all park landmarks.
+  const addFlatPathRibbon = (
+    name: string,
+    points: [number, number][],
+    halfWidth: number,
+    yOffset = 0.024,
+  ) => {
+    const curve = new THREE.CatmullRomCurve3(
+      points.map(([x, z]) => new THREE.Vector3(x, 0, z)),
+    );
+    const segments = 28;
+    const sampled = curve.getPoints(segments);
+    const leftEdge: THREE.Vector2[] = [];
+    const rightEdge: THREE.Vector2[] = [];
+    for (let i = 0; i < sampled.length; i++) {
+      const prev = sampled[Math.max(0, i - 1)];
+      const next = sampled[Math.min(sampled.length - 1, i + 1)];
+      const tx = next.x - prev.x;
+      const tz = next.z - prev.z;
+      const len = Math.hypot(tx, tz) || 1;
+      const nx = -tz / len;
+      const nz = tx / len;
+      leftEdge.push(new THREE.Vector2(sampled[i].x + nx * halfWidth, sampled[i].z + nz * halfWidth));
+      rightEdge.push(new THREE.Vector2(sampled[i].x - nx * halfWidth, sampled[i].z - nz * halfWidth));
+    }
+    const shape = new THREE.Shape();
+    shape.moveTo(leftEdge[0].x, leftEdge[0].y);
+    for (let i = 1; i < leftEdge.length; i++) {
+      shape.lineTo(leftEdge[i].x, leftEdge[i].y);
+    }
+    for (let i = rightEdge.length - 1; i >= 0; i--) {
+      shape.lineTo(rightEdge[i].x, rightEdge[i].y);
+    }
+    shape.closePath();
+    const ribbon = new THREE.Mesh(track(new THREE.ShapeGeometry(shape, 12)), pathMat);
+    ribbon.name = name;
+    ribbon.rotation.x = -Math.PI / 2;
+    ribbon.scale.y = -1;
+    ribbon.position.y = yOffset;
+    ribbon.receiveShadow = enableShadows;
+    park.add(ribbon);
+  };
+
   // Curving pale gravel path leads from the entrance through the central memory tree
-  // toward the treehouse and play spaces.
+  // toward the treehouse and outdoor cinema.
   const pathShape = new THREE.Shape();
   pathShape.moveTo(-0.56, 7.48);
   pathShape.bezierCurveTo(-0.62, 5.75, -3.15, 5.18, -3.0, 3.48);
@@ -158,6 +204,47 @@ export function buildChildhoodParkEnvironment({
   path.position.y = 0.026;
   path.receiveShadow = enableShadows;
   park.add(path);
+
+  // Connected branching paths linking the Playground, Bicycle Trail, Backyard Gathering,
+  // Memory Radio, Treehouse Ladder, Keepsake Corner, and Childhood Bedroom.
+  addFlatPathRibbon(
+    'childhood_park_east_play_bicycle_trail',
+    [
+      [0.2, 5.45],
+      [1.85, 4.75],
+      [3.65, 4.55],
+      [4.75, 3.35],
+      [4.85, 1.2],
+      [5.05, -0.45],
+      [4.35, -2.25],
+    ],
+    0.44,
+    0.023,
+  );
+  addFlatPathRibbon(
+    'childhood_park_west_bedroom_keepsake_path',
+    [
+      [-2.5, 3.5],
+      [-4.25, 3.25],
+      [-4.85, 1.1],
+      [-4.6, -1.25],
+      [-2.6, -2.9],
+      [-0.5, -0.35],
+    ],
+    0.38,
+    0.023,
+  );
+  addFlatPathRibbon(
+    'childhood_park_backyard_garden_connector',
+    [
+      [0.25, 0.45],
+      [1.95, 1.05],
+      [3.35, 1.55],
+      [4.75, 1.55],
+    ],
+    0.34,
+    0.022,
+  );
 
   // Narrow darker edging makes the route read clearly without a bright outline.
   const pathEdge = new THREE.Mesh(
@@ -185,7 +272,7 @@ export function buildChildhoodParkEnvironment({
 
   // Pebble stepping stones beside the path: one InstancedMesh, no per-stone draw calls.
   const stoneGeo = track(new THREE.CylinderGeometry(0.16, 0.19, 0.055, 8));
-  const stones = new THREE.InstancedMesh(stoneGeo, stoneMat, 18);
+  const stones = new THREE.InstancedMesh(stoneGeo, stoneMat, 24);
   const dummy = new THREE.Object3D();
   for (let i = 0; i < 18; i++) {
     const t = i / 17;
@@ -198,6 +285,16 @@ export function buildChildhoodParkEnvironment({
     dummy.updateMatrix();
     stones.setMatrixAt(i, dummy.matrix);
   }
+  const branchStoneCoords: [number, number][] = [
+    [1.4, 4.95], [2.85, 4.6], [4.25, 3.85], [4.95, 2.25], [2.4, 1.25], [-4.35, 2.15],
+  ];
+  branchStoneCoords.forEach(([sx, sz], idx) => {
+    dummy.position.set(sx, 0.052, sz);
+    dummy.rotation.y = idx * 0.45;
+    dummy.scale.set(0.84, 1, 0.78);
+    dummy.updateMatrix();
+    stones.setMatrixAt(18 + idx, dummy.matrix);
+  });
   stones.instanceMatrix.needsUpdate = true;
   stones.receiveShadow = enableShadows;
   stones.name = 'childhood_park_stepping_stones';
@@ -373,6 +470,191 @@ export function buildChildhoodParkEnvironment({
   park.add(benchObstacle);
   cameraObstacleMeshes.push(benchObstacle);
 
+  // Nostalgic Playground Seesaw tucked in the sunlit south-east play pocket (non-blocking).
+  const seesawGroup = new THREE.Group();
+  seesawGroup.name = 'childhood_park_playground_seesaw';
+  seesawGroup.position.set(2.1, 0, 5.65);
+  seesawGroup.rotation.y = 0.22;
+
+  const fulcrumBase = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.16, 0.24, 0.34, 10)),
+    woodMat,
+  );
+  fulcrumBase.position.y = 0.17;
+  fulcrumBase.castShadow = enableShadows;
+  seesawGroup.add(fulcrumBase);
+
+  const fulcrumBracket = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.06, 0.06, 0.36, 10)),
+    brassMat,
+  );
+  fulcrumBracket.rotation.x = Math.PI / 2;
+  fulcrumBracket.position.y = 0.36;
+  seesawGroup.add(fulcrumBracket);
+
+  const seesawBeamPivot = new THREE.Group();
+  seesawBeamPivot.name = 'childhood_park_seesaw_beam_pivot';
+  seesawBeamPivot.position.set(0, 0.38, 0);
+  seesawBeamPivot.rotation.z = 0.08;
+  seesawGroup.add(seesawBeamPivot);
+
+  const seesawPlank = new THREE.Mesh(
+    track(new THREE.BoxGeometry(1.92, 0.075, 0.26)),
+    woodLightMat,
+  );
+  seesawPlank.castShadow = enableShadows;
+  seesawBeamPivot.add(seesawPlank);
+
+  const seatGeo = track(new THREE.BoxGeometry(0.32, 0.04, 0.28));
+  const handlePostGeo = track(new THREE.CylinderGeometry(0.015, 0.015, 0.2, 8));
+  const handleBarGeo = track(new THREE.CylinderGeometry(0.016, 0.016, 0.24, 8));
+  [-0.74, 0.74].forEach((sx, idx) => {
+    const seat = new THREE.Mesh(seatGeo, idx === 0 ? sageMat : ivoryMat);
+    seat.position.set(sx, 0.055, 0);
+    seesawBeamPivot.add(seat);
+
+    const handleX = sx > 0 ? sx - 0.22 : sx + 0.22;
+    const hPost = new THREE.Mesh(handlePostGeo, brassMat);
+    hPost.position.set(handleX, 0.12, 0);
+    seesawBeamPivot.add(hPost);
+
+    const hBar = new THREE.Mesh(handleBarGeo, brassMat);
+    hBar.rotation.x = Math.PI / 2;
+    hBar.position.set(handleX, 0.22, 0);
+    seesawBeamPivot.add(hBar);
+  });
+  park.add(seesawGroup);
+  park.userData.seesawPivot = seesawBeamPivot;
+
+  // Sunlit Backyard Gathering Nook: woven sage/ivory picnic blanket + keepsake basket (flat/walkable).
+  const gatheringGroup = new THREE.Group();
+  gatheringGroup.name = 'childhood_park_backyard_gathering';
+  gatheringGroup.position.set(3.25, 0, 1.85);
+  gatheringGroup.rotation.y = -0.18;
+
+  const blanketCanvas = document.createElement('canvas');
+  blanketCanvas.width = 256;
+  blanketCanvas.height = 256;
+  const bCtx = blanketCanvas.getContext('2d');
+  if (bCtx) {
+    bCtx.fillStyle = '#F2E8D5';
+    bCtx.fillRect(0, 0, 256, 256);
+    bCtx.fillStyle = 'rgba(111, 135, 105, 0.34)';
+    for (let i = 0; i < 256; i += 32) {
+      bCtx.fillRect(i, 0, 14, 256);
+      bCtx.fillRect(0, i, 256, 14);
+    }
+    bCtx.strokeStyle = '#C9A66B';
+    bCtx.lineWidth = 6;
+    bCtx.strokeRect(5, 5, 246, 246);
+  }
+  const blanketTex = track(new THREE.CanvasTexture(blanketCanvas));
+  blanketTex.colorSpace = THREE.SRGBColorSpace;
+  const blanketMesh = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(1.75, 1.32)),
+    track(new THREE.MeshStandardMaterial({ map: blanketTex, roughness: 0.94 })),
+  );
+  blanketMesh.rotation.x = -Math.PI / 2;
+  blanketMesh.position.y = 0.032;
+  blanketMesh.receiveShadow = enableShadows;
+  gatheringGroup.add(blanketMesh);
+
+  const basketBody = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.42, 0.24, 0.28)),
+    woodLightMat,
+  );
+  basketBody.position.set(0.52, 0.15, -0.34);
+  basketBody.castShadow = enableShadows;
+  gatheringGroup.add(basketBody);
+
+  const basketLid = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.45, 0.05, 0.3)),
+    woodMat,
+  );
+  basketLid.position.set(0.52, 0.28, -0.34);
+  gatheringGroup.add(basketLid);
+
+  const basketHandle = new THREE.Mesh(
+    track(new THREE.TorusGeometry(0.14, 0.014, 6, 16, Math.PI)),
+    brassMat,
+  );
+  basketHandle.position.set(0.52, 0.29, -0.34);
+  gatheringGroup.add(basketHandle);
+
+  const thermos = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.048, 0.052, 0.24, 10)),
+    sageMat,
+  );
+  thermos.position.set(0.18, 0.15, -0.26);
+  gatheringGroup.add(thermos);
+  const thermosCap = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.05, 0.05, 0.055, 10)),
+    brassMat,
+  );
+  thermosCap.position.set(0.18, 0.28, -0.26);
+  gatheringGroup.add(thermosCap);
+  park.add(gatheringGroup);
+
+  // Park Directional Signpost beside the right entrance gate post (clear of central walkway).
+  const signpostGroup = new THREE.Group();
+  signpostGroup.name = 'childhood_park_directional_signpost';
+  signpostGroup.position.set(1.62, 0, 6.08);
+  const signPostPole = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.045, 0.055, 1.72, 10)),
+    woodMat,
+  );
+  signPostPole.position.y = 0.86;
+  signPostPole.castShadow = enableShadows;
+  signpostGroup.add(signPostPole);
+  const signPostFinial = new THREE.Mesh(
+    track(new THREE.SphereGeometry(0.07, 10, 10)),
+    brassMat,
+  );
+  signPostFinial.position.y = 1.75;
+  signpostGroup.add(signPostFinial);
+
+  const bladeSpecs: { label: string; y: number; rotY: number }[] = [
+    { label: '← BEDROOM · KEEPSAKES', y: 1.54, rotY: 0.22 },
+    { label: '↑ MEMORY TREE · CINEMA', y: 1.32, rotY: 0.0 },
+    { label: 'TREEHOUSE · PLAYGROUND →', y: 1.1, rotY: -0.28 },
+  ];
+  const bladeGeo = track(new THREE.BoxGeometry(0.86, 0.15, 0.03));
+  bladeSpecs.forEach(({ label, y, rotY }) => {
+    const bladeCanvas = document.createElement('canvas');
+    bladeCanvas.width = 384;
+    bladeCanvas.height = 72;
+    const ctx = bladeCanvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#F4E8D2';
+      ctx.fillRect(0, 0, 384, 72);
+      ctx.strokeStyle = '#C9A66B';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(4, 4, 376, 64);
+      ctx.fillStyle = '#4B3A2C';
+      ctx.font = 'bold 21px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, 192, 37);
+    }
+    const bladeTex = track(new THREE.CanvasTexture(bladeCanvas));
+    bladeTex.colorSpace = THREE.SRGBColorSpace;
+    const bladeFaceMat = track(
+      new THREE.MeshStandardMaterial({ map: bladeTex, roughness: 0.78 }),
+    );
+    const blade = new THREE.Mesh(bladeGeo, [
+      woodMat,
+      woodMat,
+      woodMat,
+      woodMat,
+      bladeFaceMat,
+      bladeFaceMat,
+    ]);
+    blade.position.y = y;
+    blade.rotation.y = rotY;
+    signpostGroup.add(blade);
+  });
+  park.add(signpostGroup);
+
   // Flowers are instanced for a rich park edge without creating dozens of draw calls.
   const flowerStemGeo = track(new THREE.CylinderGeometry(0.012, 0.018, 0.28, 5));
   const flowerHeadGeo = track(new THREE.SphereGeometry(0.075, 7, 6));
@@ -421,11 +703,16 @@ export function buildChildhoodParkEnvironment({
   gate.name = 'childhood_park_entrance_arbor';
   gate.position.set(0, 0, 6.72);
   const gatePostGeo = track(new THREE.BoxGeometry(0.16, 2.85, 0.18));
+  const gateCollarGeo = track(new THREE.BoxGeometry(0.21, 0.08, 0.23));
   [-1.85, 1.85].forEach((x) => {
     const post = new THREE.Mesh(gatePostGeo, woodMat);
     post.position.set(x, 1.42, 0);
     post.castShadow = enableShadows;
     gate.add(post);
+
+    const collar = new THREE.Mesh(gateCollarGeo, brassMat);
+    collar.position.set(x, 2.74, 0);
+    gate.add(collar);
   });
   const gateTop = new THREE.Mesh(track(new THREE.BoxGeometry(3.95, 0.18, 0.22)), woodLightMat);
   gateTop.position.set(0, 2.8, 0);
@@ -458,9 +745,10 @@ export function buildChildhoodParkEnvironment({
   gate.add(signBoard);
   park.add(gate);
 
-  // Soft park lanterns: static warm practicals, no additional animation or lights.
+  // Soft park lanterns with champagne-brass collars harmonizing with museum architecture.
   const lampPositions: [number, number][] = [[-3.8, 0.15], [3.85, -4.5], [4.6, 2.0]];
   const lampPostGeo = track(new THREE.CylinderGeometry(0.035, 0.055, 1.8, 8));
+  const lampCollarGeo = track(new THREE.CylinderGeometry(0.068, 0.068, 0.06, 10));
   const lampHeadGeo = track(new THREE.SphereGeometry(0.13, 8, 8));
   lampPositions.forEach(([x, z]) => {
     const lamp = new THREE.Group();
@@ -468,8 +756,11 @@ export function buildChildhoodParkEnvironment({
     const post = new THREE.Mesh(lampPostGeo, woodMat);
     post.position.y = 0.9;
     lamp.add(post);
+    const collar = new THREE.Mesh(lampCollarGeo, brassMat);
+    collar.position.y = 1.72;
+    lamp.add(collar);
     const head = new THREE.Mesh(lampHeadGeo, lanternMat);
-    head.position.y = 1.85;
+    head.position.y = 1.86;
     lamp.add(head);
     park.add(lamp);
   });

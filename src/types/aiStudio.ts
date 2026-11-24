@@ -24,7 +24,10 @@ export type AICapability =
 export type ConnectionState =
   | 'connected'
   | 'missing_credentials'
+  | 'auth_failed'
   | 'rate_limited'
+  | 'provider_unavailable'
+  | 'invalid_response'
   | 'error';
 
 export interface ProviderUsageMetrics {
@@ -602,7 +605,10 @@ export interface AITaskResponse<T = unknown> {
       | 'MISSING_CREDENTIALS'
       | 'CONSENT_REQUIRED'
       | 'UNAUTHORIZED_MEMORY_ACCESS'
+      | 'AUTHENTICATION_FAILED'
       | 'RATE_LIMITED'
+      | 'PROVIDER_UNAVAILABLE'
+      | 'INVALID_AI_RESPONSE'
       | 'INVALID_INPUT'
       | 'MALFORMED_AI_OUTPUT'
       | 'PROVIDER_ERROR'

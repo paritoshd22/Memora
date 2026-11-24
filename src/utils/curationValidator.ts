@@ -315,42 +315,63 @@ export function validateLocationPlacement(
   locationId: ChildhoodWorldLocationId;
   catalogEntry: (typeof CHILDHOOD_WORLD_LOCATION_CATALOGUE)[ChildhoodWorldLocationId];
   offset: { x: number; y: number };
+  wasCorrected: boolean;
+  correctionNote?: string;
 } {
+  const defaultLocationForMedia = (type: MemoryMediaType): ChildhoodWorldLocationId => {
+    switch (type) {
+      case 'video':
+        return 'outdoor_cinema';
+      case 'audio':
+        return 'memory_radio';
+      case 'document':
+      case 'certificate':
+        return 'study_corner';
+      case 'chat':
+        return 'treehouse';
+      case 'story':
+        return 'bedroom';
+      case 'image':
+      default:
+        return 'memory_garden';
+    }
+  };
+
   let locationId: ChildhoodWorldLocationId = 'keepsake_corner';
+  let wasCorrected = false;
+  let correctionNote: string | undefined;
 
   if (
     typeof preferredOffset?.confidenceScore === 'number' &&
     preferredOffset.confidenceScore < 0.42
   ) {
     locationId = 'keepsake_corner';
+    if (requestedLocation && requestedLocation !== 'keepsake_corner') {
+      wasCorrected = true;
+      correctionNote = 'Low confidence score routed this item to Keepsake Corner for manual review.';
+    }
   } else if (
     requestedLocation &&
     VALID_LOCATION_IDS.has(requestedLocation as ChildhoodWorldLocationId)
   ) {
-    locationId = requestedLocation as ChildhoodWorldLocationId;
+    const candidate = requestedLocation as ChildhoodWorldLocationId;
+    const candidateEntry = CHILDHOOD_WORLD_LOCATION_CATALOGUE[candidate];
+    if (
+      Array.isArray(candidateEntry.allowedMediaTypes) &&
+      candidateEntry.allowedMediaTypes.length > 0 &&
+      !candidateEntry.allowedMediaTypes.includes(mediaType)
+    ) {
+      locationId = defaultLocationForMedia(mediaType);
+      wasCorrected = true;
+      correctionNote = `"${candidateEntry.label}" does not support ${mediaType} exhibits; redirected to ${CHILDHOOD_WORLD_LOCATION_CATALOGUE[locationId].label}.`;
+    } else {
+      locationId = candidate;
+    }
   } else {
-    // Sensible deterministic defaults by media type
-    switch (mediaType) {
-      case 'video':
-        locationId = 'outdoor_cinema';
-        break;
-      case 'audio':
-        locationId = 'memory_radio';
-        break;
-      case 'document':
-      case 'certificate':
-        locationId = 'study_corner';
-        break;
-      case 'chat':
-        locationId = 'treehouse';
-        break;
-      case 'story':
-        locationId = 'bedroom';
-        break;
-      case 'image':
-      default:
-        locationId = 'memory_garden';
-        break;
+    locationId = defaultLocationForMedia(mediaType);
+    if (requestedLocation && requestedLocation.trim().length > 0) {
+      wasCorrected = true;
+      correctionNote = `Unrecognized location "${requestedLocation}" redirected to ${CHILDHOOD_WORLD_LOCATION_CATALOGUE[locationId].label}.`;
     }
   }
 
@@ -366,7 +387,7 @@ export function validateLocationPlacement(
         : 0,
   };
 
-  return { locationId, catalogEntry, offset: safeOffset };
+  return { locationId, catalogEntry, offset: safeOffset, wasCorrected, correctionNote };
 }
 
 export function requiresSensitive3DApproval(reportOrText: {
