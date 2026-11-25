@@ -407,38 +407,53 @@ export function createEmptyExhibitPlaceholderTexture(
   canvas.height = 512;
   const ctx = canvas.getContext('2d')!;
 
-  const grad = ctx.createRadialGradient(256, 256, 30, 256, 256, 340);
-  grad.addColorStop(0, '#3D291A');
-  grad.addColorStop(1, '#22150C');
+  // Warm archival museum linen & travertine mat board instead of dark black board
+  const grad = ctx.createRadialGradient(256, 236, 24, 256, 256, 360);
+  grad.addColorStop(0, '#F7F1E5');
+  grad.addColorStop(0.68, '#EFE5D4');
+  grad.addColorStop(1, '#E3D5BF');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 512, 512);
 
-  ctx.strokeStyle = 'rgba(235, 194, 122, 0.58)';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(24, 24, 464, 464);
+  // Subtle recessed inner mat bevel
+  ctx.fillStyle = '#FAF5EC';
+  ctx.fillRect(44, 44, 424, 424);
 
-  ctx.strokeStyle = 'rgba(235, 194, 122, 0.25)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(38, 38, 436, 436);
-
-  ctx.strokeStyle = '#EBC27A';
+  ctx.strokeStyle = 'rgba(184, 146, 88, 0.65)';
   ctx.lineWidth = 3;
+  ctx.strokeRect(26, 26, 460, 460);
+
+  ctx.strokeStyle = 'rgba(138, 109, 68, 0.38)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(44, 44, 424, 424);
+
+  // Delicate archival botanical & sun horizon sketch in muted sage and champagne brass
+  ctx.strokeStyle = 'rgba(125, 143, 114, 0.55)';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.arc(256, 192, 42, 0, Math.PI * 2);
+  ctx.moveTo(136, 224);
+  ctx.quadraticCurveTo(196, 198, 256, 220);
+  ctx.quadraticCurveTo(316, 240, 376, 214);
   ctx.stroke();
 
-  ctx.fillStyle = '#FFF5E4';
+  ctx.strokeStyle = '#C9A66B';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.arc(256, 178, 28, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = '#3B2A1D';
   ctx.textAlign = 'center';
-  ctx.font = '700 28px "Cormorant Garamond", Georgia, serif';
-  ctx.fillText(slotTitle.slice(0, 28), 256, 288);
+  ctx.font = '600 26px "Cormorant Garamond", Georgia, serif';
+  ctx.fillText(slotTitle.slice(0, 28), 256, 286);
 
-  ctx.fillStyle = '#DFC8A6';
-  ctx.font = '500 18px "Plus Jakarta Sans", sans-serif';
-  ctx.fillText(slotSubtitle.slice(0, 38), 256, 326);
+  ctx.fillStyle = '#736252';
+  ctx.font = '500 16px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText(slotSubtitle.slice(0, 38), 256, 320);
 
-  ctx.fillStyle = '#EBC27A';
-  ctx.font = '600 15px "JetBrains Mono", monospace';
-  ctx.fillText('+ UPLOAD MEMORY TO POPULATE', 256, 378);
+  ctx.fillStyle = '#9C7A44';
+  ctx.font = '600 13px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText('Archival Keepsake Frame', 256, 366);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;

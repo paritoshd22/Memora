@@ -173,33 +173,38 @@ class AtriumErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-[#F6F1E8] p-6">
-          <div className="max-w-md w-full rounded-2xl bg-[#FFFCF6] border border-[#E8DED0] p-6 shadow-xl text-center">
-            <h2 className="font-serif-display text-2xl font-semibold text-[#27231F] mb-2">
-              3D Atrium Paused
-            </h2>
-            <p className="text-sm text-[#6E645A] mb-5">
-              The 3D atrium encountered a rendering interruption. Your memories, rooms, and museum collections are completely safe.
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  this.props.onResetCharacter();
-                  this.setState({ hasError: false });
-                }}
-                className="px-4 py-2.5 rounded-xl bg-[#27231F] hover:bg-[#493629] text-[#FFFCF6] text-xs font-semibold tracking-wide transition-colors cursor-pointer"
-              >
-                Reload 3D Museum
-              </button>
-              <button
-                type="button"
-                onClick={this.props.onOpenFeatureWall}
-                className="px-4 py-2.5 rounded-xl bg-[#F6F1E8] hover:bg-[#E9D4B1]/50 text-[#27231F] border border-[#D6A15D]/50 text-xs font-semibold tracking-wide transition-colors cursor-pointer"
-              >
-                Open Rooms & Feature Hub
-              </button>
+        <div className="fixed bottom-4 left-4 z-40 max-w-sm rounded-2xl bg-[#27231F]/95 text-[#FFFCF6] border border-[#C9A66B]/60 p-4 shadow-2xl backdrop-blur-md">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-mono-tabular uppercase tracking-widest text-[#C9A66B]">
+                Renderer Recovery
+              </p>
+              <h2 className="font-serif-display text-base font-semibold text-[#FFE2B5] mt-0.5">
+                Restore 3D Museum View
+              </h2>
+              <p className="text-xs text-[#E8DED0]/85 mt-1 leading-relaxed">
+                A temporary graphics interruption occurred. Your memories and galleries remain intact.
+              </p>
             </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                this.props.onResetCharacter();
+                this.setState({ hasError: false });
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-[#C9A66B] hover:brightness-105 text-[#27231F] text-xs font-semibold tracking-wide transition-all cursor-pointer"
+            >
+              Restore 3D View
+            </button>
+            <button
+              type="button"
+              onClick={this.props.onOpenFeatureWall}
+              className="px-3 py-1.5 rounded-xl bg-[#FFFCF6]/10 hover:bg-[#FFFCF6]/20 text-[#FFFCF6] border border-[#C9A66B]/40 text-xs font-medium transition-colors cursor-pointer"
+            >
+              Museum Directory
+            </button>
           </div>
         </div>
       );
@@ -250,7 +255,7 @@ function getScopedStorageKeys(user: MuseumUserAccount | null) {
   };
 }
 
-function createFreshPredefinedRooms(activated = false): Room[] {
+function createFreshPredefinedRooms(activated = true): Room[] {
   return INITIAL_ROOMS.map((r) => {
     const isChildhood = r.id === 'childhood';
     const shouldActivate = isChildhood && activated;
@@ -279,13 +284,13 @@ function normalizeMuseumToFourRoomsPerFloor(
   rooms: Room[];
   memories: Memory[];
 } {
-  // Brand new users start with 0 activated rooms (all 12 starting slots empty and ready for activation)
+  // Brand new users start directly inside the museum with the Childhood Memory Park active and ready to explore
   if (isBrandNewUser) {
     const brandNewFloors: Floor[] = INITIAL_FLOORS.map((f) => ({
       ...f,
       roomSlotIds: [...f.roomSlotIds] as [string, string, string, string],
     }));
-    const brandNewRooms: Room[] = createFreshPredefinedRooms(false);
+    const brandNewRooms: Room[] = createFreshPredefinedRooms(true);
     return {
       floors: brandNewFloors,
       rooms: brandNewRooms,
@@ -452,7 +457,7 @@ function normalizeMuseumToFourRoomsPerFloor(
 
 function getDefaultCharacterState(): CharacterState {
   return {
-    position: [0, 0, 35.5],
+    position: [0, 0, 5.2],
     rotationY: Math.PI,
     currentFloorId: 'floor-0',
     currentFloorNumber: 0,
@@ -602,7 +607,7 @@ export default function App() {
     }
 
     const isChildhoodExplicitlyActivated =
-      localStorage.getItem(keys.CHILDHOOD_ACTIVATED) === 'true';
+      localStorage.getItem(keys.CHILDHOOD_ACTIVATED) !== 'false';
 
     const normalized = normalizeMuseumToFourRoomsPerFloor(
       loadedFloors,
@@ -1211,10 +1216,16 @@ export default function App() {
   >('search');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isMusicPlayerOpen, setIsMusicPlayerOpen] = useState(false);
-  const [showControlsGuide, setShowControlsGuide] = useState(true);
+  const [showControlsGuide, setShowControlsGuide] = useState(false);
+  const [atriumOpeningVeil, setAtriumOpeningVeil] = useState(true);
   const [isAudioPlaying, setIsAudioPlaying] = useState<boolean>(
     () => museumAudioEngine.getSnapshot().isPlaying,
   );
+
+  useEffect(() => {
+    const timer = setTimeout(() => setAtriumOpeningVeil(false), 550);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     return museumAudioEngine.subscribe((snap) => {
@@ -1347,9 +1358,7 @@ export default function App() {
       setActiveRoomId(null);
       setActiveNav('home');
       setHasEnteredAtrium(true);
-
-      // Trigger the 3D Character Welcome Experience once during first entry
-      setCharacterWelcomeActive(true);
+      setCharacterWelcomeActive(false);
       try {
         localStorage.setItem(keys.WELCOME_SHOWN, 'true');
       } catch {
@@ -1377,23 +1386,11 @@ export default function App() {
     setActiveRoomId(null);
     setActiveNav('home');
     setHasEnteredAtrium(true);
-
-    const welcomeAlreadyShown =
-      localStorage.getItem(keys.WELCOME_SHOWN) === 'true';
-    if (!welcomeAlreadyShown && !user.isGuest) {
-      setCharacterWelcomeActive(true);
-      try {
-        localStorage.setItem(keys.WELCOME_SHOWN, 'true');
-      } catch {
-        // ignore
-      }
-    } else {
-      emitNotification(
-        'welcome-back',
-        `Welcome back, ${user.displayName}`,
-        'Your personal 3D museum archive is ready.',
-        'important',
-      );
+    setCharacterWelcomeActive(false);
+    try {
+      localStorage.setItem(keys.WELCOME_SHOWN, 'true');
+    } catch {
+      // ignore
     }
   };
 
@@ -1523,7 +1520,7 @@ export default function App() {
 
   const handleDeactivateChildhoodRoom = useCallback(() => {
     try {
-      localStorage.removeItem(scopedKeys.CHILDHOOD_ACTIVATED);
+      localStorage.setItem(scopedKeys.CHILDHOOD_ACTIVATED, 'false');
     } catch {
       // ignore
     }
@@ -2866,6 +2863,21 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Brief elegant loading fade veil on initial Atrium entry */}
+      <div
+        aria-hidden="true"
+        className={`fixed inset-0 z-50 pointer-events-none bg-[#F6F1E8] flex items-center justify-center transition-opacity duration-500 ${
+          atriumOpeningVeil ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <div className="flex flex-col items-center gap-2">
+          <span className="font-serif-display text-xl tracking-[0.22em] uppercase text-[#27231F]">
+            {BRAND.name}
+          </span>
+          <span className="h-[1px] w-16 bg-[#C9A66B]" />
+        </div>
+      </div>
 
       {/* ====================================================================
           2B. SINGLE ACTIVE ROOM SYSTEM — "ACTIVATE YOUR ROOM" BOARD & THANK-YOU SCREEN

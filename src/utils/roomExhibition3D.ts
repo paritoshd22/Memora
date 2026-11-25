@@ -1616,6 +1616,7 @@ export function buildExhibitionRoom3DScene(params: {
     track(new THREE.MeshBasicMaterial({ map: headerBannerTex })),
   );
   headerBannerMesh.position.set(0, 4.58, -halfD + 0.25);
+  headerBannerMesh.visible = !isChildhoodPark;
   rootGroup.add(headerBannerMesh);
 
   // Back-Left & Back-Center Illuminated Wooden Bookcases with Books & Cascading Ivy (matching reference background)
@@ -2013,7 +2014,7 @@ export function buildExhibitionRoom3DScene(params: {
       }
     };
 
-    // Helper to create a 3D rounded dark-walnut & gold Zone Sign Plaque with interactive hitbox
+    // Helper to create a 3D walnut & champagne-brass Zone Sign Plaque (grounded architectural lectern in Childhood Park)
     const addZoneSignPlaque3D = (opts: {
       title: string;
       subtitle: string;
@@ -2026,26 +2027,49 @@ export function buildExhibitionRoom3DScene(params: {
       linkedMemory?: Memory;
       zoneId: string;
     }) => {
-      const w = opts.width || 1.48;
-      const h = opts.height || 0.48;
+      const useGroundedLectern = isChildhoodPark && opts.zoneId !== 'interactive_scrapbook';
+      const w = useGroundedLectern ? Math.min(0.76, (opts.width || 1.2) * 0.52) : (opts.width || 1.48);
+      const h = useGroundedLectern ? 0.24 : (opts.height || 0.48);
+      const plaqueY = useGroundedLectern ? 0.86 : opts.y;
+
       const signGroup = new THREE.Group();
       signGroup.name = `zone_sign_${opts.zoneId}`;
-      signGroup.position.set(opts.x, opts.y, opts.z);
+      signGroup.position.set(opts.x, plaqueY, opts.z);
       signGroup.rotation.y = opts.rotY || 0;
       rootGroup.add(signGroup);
 
+      const headGroup = new THREE.Group();
+      if (useGroundedLectern) {
+        headGroup.rotation.x = -0.38;
+        const postHeight = Math.max(0.2, plaqueY - 0.04);
+        const post = new THREE.Mesh(
+          track(new THREE.CylinderGeometry(0.024, 0.032, postHeight, 10)),
+          matWalnut,
+        );
+        post.position.set(0, -postHeight * 0.5, -0.02);
+        signGroup.add(post);
+
+        const basePlinth = new THREE.Mesh(
+          track(new THREE.CylinderGeometry(0.11, 0.13, 0.04, 12)),
+          matChampagneGold,
+        );
+        basePlinth.position.set(0, -plaqueY + 0.02, -0.02);
+        signGroup.add(basePlinth);
+      }
+      signGroup.add(headGroup);
+
       const signBack = new THREE.Mesh(
-        track(new THREE.BoxGeometry(w, h, 0.045)),
+        track(new THREE.BoxGeometry(w, h, 0.038)),
         matWalnut,
       );
-      signGroup.add(signBack);
+      headGroup.add(signBack);
 
       const signRim = new THREE.Mesh(
-        track(new THREE.BoxGeometry(w + 0.035, h + 0.035, 0.035)),
+        track(new THREE.BoxGeometry(w + 0.028, h + 0.028, 0.03)),
         matChampagneGold,
       );
-      signRim.position.z = -0.005;
-      signGroup.add(signRim);
+      signRim.position.z = -0.004;
+      headGroup.add(signRim);
 
       const signTex = track(
         createRoundedZoneSignPlaqueTexture(
@@ -2064,16 +2088,16 @@ export function buildExhibitionRoom3DScene(params: {
           }),
         ),
       );
-      signFace.position.z = 0.026;
-      signGroup.add(signFace);
+      signFace.position.z = 0.022;
+      headGroup.add(signFace);
 
       const mem = opts.linkedMemory || defaultInteractMem;
       if (mem) {
         const zoneHitbox = new THREE.Mesh(
-          track(new THREE.BoxGeometry(w + 0.55, h + 0.95, 0.72)),
+          track(new THREE.BoxGeometry(w + 0.45, h + 0.75, 0.62)),
           track(new THREE.MeshBasicMaterial({ visible: false })),
         );
-        zoneHitbox.position.set(0, -0.22, 0.16);
+        zoneHitbox.position.set(0, -0.18, 0.14);
         zoneHitbox.userData = {
           kind: 'room_memory_display',
           memoryId: mem.id,
@@ -2551,25 +2575,33 @@ export function buildExhibitionRoom3DScene(params: {
 
     floatingFrameSpots.forEach((spot, idx) => {
       const fMem = uploadedMemories[idx];
+      // In the open-air Childhood Memory Park, avoid crowding the central tree with empty floating boards;
+      // show all user-uploaded photos plus up to 2 warm matted heirloom keepsake frames around the tree.
+      if (isChildhoodPark && !fMem && idx >= Math.max(2, uploadedMemories.length)) {
+        return;
+      }
       const fGroup = new THREE.Group();
-      fGroup.position.set(spot.x, spot.y, spot.z);
+      const frameY = isChildhoodPark ? Math.min(2.15, spot.y - 0.22) : spot.y;
+      fGroup.position.set(spot.x, frameY, spot.z);
       fGroup.rotation.y = spot.rotY;
       rootGroup.add(fGroup);
 
       animatedFloatingFrames.push({
         group: fGroup,
-        baseY: spot.y,
+        baseY: frameY,
         baseRotY: spot.rotY,
         phase: idx * 1.15,
       });
 
-      // Double glowing golden neon-border frame matching the reference image
+      // Warm walnut & champagne-brass heirloom frame in Childhood Park
       const glowFrameOuter = new THREE.Mesh(
-        track(new THREE.BoxGeometry(spot.w + 0.1, spot.h + 0.1, 0.036)),
-        matWarmEmissiveStrip,
+        track(new THREE.BoxGeometry(spot.w + 0.08, spot.h + 0.08, 0.036)),
+        isChildhoodPark ? matWalnut : matWarmEmissiveStrip,
       );
       fGroup.add(glowFrameOuter);
-      cameraObstacleMeshes.push(glowFrameOuter);
+      if (!isChildhoodPark) {
+        cameraObstacleMeshes.push(glowFrameOuter);
+      }
 
       const goldInnerBezel = new THREE.Mesh(
         track(new THREE.BoxGeometry(spot.w + 0.02, spot.h + 0.02, 0.042)),

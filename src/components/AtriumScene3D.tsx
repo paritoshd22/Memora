@@ -1875,9 +1875,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     let maxTextureSizeCap = 4096;
 
     try {
-      const probeCanvas = document.createElement('canvas');
-      const gl =
-        probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+        powerPreference: 'high-performance',
+      });
+
+      const gl = renderer.getContext();
       if (!gl) {
         isSoftwareGl = true;
       } else {
@@ -1892,15 +1896,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(
           glRendererStr,
         );
-        // Immediately release temporary probe WebGL context so we never leak a context slot
-        try {
-          gl.getExtension('WEBGL_lose_context')?.loseContext();
-        } catch {
-          // Ignore if browser restricts manual context loss
-        }
       }
-      probeCanvas.width = 0;
-      probeCanvas.height = 0;
 
       const viewportWidth = container.clientWidth || window.innerWidth || 1024;
       const viewportHeight = container.clientHeight || window.innerHeight || 768;
@@ -1935,13 +1931,6 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         detectedHardware.gpuTier,
         isSoftwareGl,
       );
-      let qualityConfig = graphicsMonitorLocal.currentConfig;
-
-      renderer = new THREE.WebGLRenderer({
-        antialias: Boolean(qualityConfig.enableAntialias),
-        alpha: false,
-        powerPreference: 'high-performance',
-      });
 
       // Stash monitor & capability flags cleanly on locals inside useEffect scope via outer bindings below
       (renderer as unknown as { __memoraInit?: unknown }).__memoraInit = {
@@ -2857,6 +2846,137 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         },
       );
     };
+
+    // 5B. Interactive 3D Atrium Guide Character & Museum Gallery Benches in Central Atrium
+    const atriumGuideGroup = new THREE.Group();
+    atriumGuideGroup.name = 'atrium_guide_character_3d';
+    const atriumGuideBaseX = 2.15;
+    const atriumGuideBaseZ = 3.25;
+    const atriumGuideBaseRotY = -0.38;
+    atriumGuideGroup.position.set(atriumGuideBaseX, 0, atriumGuideBaseZ);
+    atriumGuideGroup.rotation.y = atriumGuideBaseRotY;
+    scene.add(atriumGuideGroup);
+
+    const guidePedestal = new THREE.Mesh(
+      trackStatic(new THREE.CylinderGeometry(0.32, 0.36, 0.04, 24)),
+      matBrushedGold,
+    );
+    guidePedestal.position.y = 0.02;
+    atriumGuideGroup.add(guidePedestal);
+
+    const guideLegGeo = trackStatic(new THREE.CylinderGeometry(0.062, 0.052, 0.72, 12));
+    [-0.1, 0.1].forEach((lx) => {
+      const leg = new THREE.Mesh(guideLegGeo, matWalnut);
+      leg.position.set(lx, 0.38, 0);
+      leg.castShadow = qualityConfig.enableShadows;
+      atriumGuideGroup.add(leg);
+    });
+
+    const atriumGuideTorso = new THREE.Mesh(
+      trackStatic(new THREE.CylinderGeometry(0.165, 0.21, 0.68, 16)),
+      matWarmLimestone,
+    );
+    atriumGuideTorso.position.set(0, 1.04, 0);
+    atriumGuideTorso.castShadow = qualityConfig.enableShadows;
+    atriumGuideGroup.add(atriumGuideTorso);
+
+    const guideLapel = new THREE.Mesh(
+      trackStatic(new THREE.TorusGeometry(0.145, 0.028, 10, 20)),
+      matBrushedGold,
+    );
+    guideLapel.rotation.x = Math.PI / 2;
+    guideLapel.position.set(0, 1.35, 0);
+    atriumGuideGroup.add(guideLapel);
+
+    const atriumGuideHead = new THREE.Group();
+    atriumGuideHead.position.set(0, 1.56, 0);
+    atriumGuideGroup.add(atriumGuideHead);
+
+    const guideHeadSphere = new THREE.Mesh(
+      trackStatic(new THREE.SphereGeometry(0.155, 18, 18)),
+      matSkinTone,
+    );
+    guideHeadSphere.castShadow = qualityConfig.enableShadows;
+    atriumGuideHead.add(guideHeadSphere);
+
+    const guideHairCap = new THREE.Mesh(
+      trackStatic(new THREE.SphereGeometry(0.162, 16, 14, 0, Math.PI * 2, 0, Math.PI * 0.58)),
+      matWalnut,
+    );
+    guideHairCap.position.set(0, 0.02, -0.015);
+    atriumGuideHead.add(guideHairCap);
+
+    const atriumGuideLeftArm = new THREE.Mesh(
+      trackStatic(new THREE.CylinderGeometry(0.048, 0.042, 0.54, 12)),
+      matWarmLimestone,
+    );
+    atriumGuideLeftArm.position.set(-0.23, 1.05, 0.02);
+    atriumGuideLeftArm.rotation.z = 0.16;
+    atriumGuideGroup.add(atriumGuideLeftArm);
+
+    const atriumGuideRightArmPivot = new THREE.Group();
+    atriumGuideRightArmPivot.position.set(0.22, 1.31, 0.02);
+    atriumGuideGroup.add(atriumGuideRightArmPivot);
+
+    const guideRightArmMesh = new THREE.Mesh(
+      trackStatic(new THREE.CylinderGeometry(0.048, 0.042, 0.52, 12)),
+      matWarmLimestone,
+    );
+    guideRightArmMesh.position.set(0.06, -0.22, 0.04);
+    guideRightArmMesh.rotation.z = -0.24;
+    atriumGuideRightArmPivot.add(guideRightArmMesh);
+
+    const atriumGuideHitbox = new THREE.Mesh(
+      trackStatic(new THREE.BoxGeometry(0.85, 1.95, 0.85)),
+      trackStatic(new THREE.MeshBasicMaterial({ visible: false })),
+    );
+    atriumGuideHitbox.position.set(0, 0.98, 0);
+    atriumGuideHitbox.userData = {
+      kind: 'atrium_guide_character',
+      title: 'Museum Curator Guide',
+    };
+    atriumGuideGroup.add(atriumGuideHitbox);
+    let atriumGuideWaveTimer = 1.4;
+
+    // 4 Sculpted Walnut, Travertine & Bouclé Museum Benches around the Ground Floor Atrium Parterre
+    const atriumBenchesGroup = new THREE.Group();
+    atriumBenchesGroup.name = 'atrium_parterre_benches';
+    scene.add(atriumBenchesGroup);
+    const benchSeatGeo = trackStatic(new THREE.BoxGeometry(1.72, 0.1, 0.54));
+    const benchCushionGeo = trackStatic(new THREE.BoxGeometry(1.62, 0.07, 0.48));
+    const benchLegGeo = trackStatic(new THREE.BoxGeometry(0.09, 0.4, 0.48));
+    const benchBrassFootGeo = trackStatic(new THREE.BoxGeometry(0.11, 0.05, 0.5));
+    [
+      { x: -4.25, z: 1.8, rotY: Math.PI / 2 },
+      { x: 4.25, z: 1.8, rotY: -Math.PI / 2 },
+      { x: -3.35, z: 5.05, rotY: 0.32 },
+      { x: 3.35, z: 5.05, rotY: -0.32 },
+    ].forEach((bSpec) => {
+      const bNode = new THREE.Group();
+      bNode.position.set(bSpec.x, 0, bSpec.z);
+      bNode.rotation.y = bSpec.rotY;
+      atriumBenchesGroup.add(bNode);
+
+      const seat = new THREE.Mesh(benchSeatGeo, matWalnut);
+      seat.position.y = 0.42;
+      seat.castShadow = qualityConfig.enableShadows;
+      seat.receiveShadow = true;
+      bNode.add(seat);
+
+      const cushion = new THREE.Mesh(benchCushionGeo, matWarmLimestone);
+      cushion.position.y = 0.49;
+      cushion.receiveShadow = true;
+      bNode.add(cushion);
+
+      [-0.72, 0.72].forEach((lx) => {
+        const leg = new THREE.Mesh(benchLegGeo, matWalnut);
+        leg.position.set(lx, 0.2, 0);
+        bNode.add(leg);
+        const foot = new THREE.Mesh(benchBrassFootGeo, matBrushedGold);
+        foot.position.set(lx, 0.025, 0);
+        bNode.add(foot);
+      });
+    });
 
     // Sparse, slow-moving atmospheric lightwell motes suspended in the central atrium sunbeam shaft
     const MOTE_COUNT = 42;
@@ -5248,7 +5368,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         floor0Hitboxes = [];
         atriumHitboxesByFloor.set(0, floor0Hitboxes);
       }
-      floor0Hitboxes.push(centerpieceHitbox);
+      floor0Hitboxes.push(centerpieceHitbox, atriumGuideHitbox);
 
       // Freeze purely static structural meshes so Three.js skips redundant matrix compositions every frame
       for (let i = 0; i < solidWallMeshes.length; i++) {
@@ -5408,6 +5528,8 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       if (!room) {
         dynamicWorldGroup.visible = true;
         centerpieceGroup.visible = true;
+        atriumGuideGroup.visible = true;
+        atriumBenchesGroup.visible = true;
         atriumMotesPoints.visible =
           !isSoftwareGl &&
           !qualityConfig.profileId?.startsWith('desktop_') &&
@@ -5419,6 +5541,8 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       // Hide Atrium groups while exploring inside the dedicated 3D exhibition room
       dynamicWorldGroup.visible = false;
       centerpieceGroup.visible = false;
+      atriumGuideGroup.visible = false;
+      atriumBenchesGroup.visible = false;
       atriumMotesPoints.visible = false;
       liftCabinGroup.visible = false;
 
@@ -6909,6 +7033,17 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             return;
           }
 
+          if (hitData.kind === 'atrium_guide_character' && hits[0].distance < 9.5) {
+            atriumGuideWaveTimer = 1.8;
+            onEmitTipRef.current?.(
+              'atrium-guide-greeting',
+              'Museum Guide — Welcome to your Central Atrium',
+              'Walk through the illuminated Childhood Room archway ahead or click + Add Memory to place a photograph in your Childhood Memory Park.',
+              'important',
+            );
+            return;
+          }
+
           // Note: Active rooms are NEVER entered via cursor click — only empty slots can open the Create Room modal on click.
           if (hitData.kind === 'room_portal') {
             const { roomId, floorId, slotIndex, status } = hitData;
@@ -7292,6 +7427,32 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                 art.rotation.y = elapsed * 0.35 + i * 0.9;
                 art.position.y = 0.98 + Math.sin(elapsed * 1.6 + i) * 0.025;
               }
+            }
+
+            // Subtle life-like idle breathing & visitor orientation for the Atrium Guide Character
+            const guideDx = explorerGroup.position.x - atriumGuideBaseX;
+            const guideDz = explorerGroup.position.z - atriumGuideBaseZ;
+            const guideDist = Math.hypot(guideDx, guideDz);
+            const targetGuideRotY =
+              guideDist < 6.5 && Math.abs(explorerGroup.position.y) < 1.5
+                ? Math.atan2(guideDx, guideDz)
+                : atriumGuideBaseRotY + Math.sin(elapsed * 0.55) * 0.08;
+            let rotDiff = targetGuideRotY - atriumGuideGroup.rotation.y;
+            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+            atriumGuideGroup.rotation.y += rotDiff * Math.min(1, delta * 3.5);
+            atriumGuideTorso.position.y = 1.04 + Math.sin(elapsed * 2.1) * 0.012;
+            atriumGuideHead.position.y = 1.56 + Math.sin(elapsed * 2.1) * 0.014;
+            if (atriumGuideWaveTimer > 0) {
+              atriumGuideWaveTimer = Math.max(0, atriumGuideWaveTimer - delta);
+              atriumGuideRightArmPivot.rotation.z =
+                -2.15 + Math.sin(elapsed * 9.5) * 0.32;
+            } else {
+              atriumGuideRightArmPivot.rotation.z = THREE.MathUtils.lerp(
+                atriumGuideRightArmPivot.rotation.z,
+                0,
+                Math.min(1, delta * 5),
+              );
             }
           }
 
@@ -9197,92 +9358,61 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         aria-label="Interactive Multi-Floor 3D Personal Museum"
       />
 
-      {/* WebGL Context Lost / Initialization Error Recovery Banner & Interactive Fallback */}
+      {/* Non-Blocking Compact WebGL Context Recovery Toast (bottom-left) */}
       {(webglError || webglContextLost) && (
         <div
           role="alert"
-          className="fixed inset-0 z-40 bg-[#F6F1E8]/95 backdrop-blur-md flex items-center justify-center p-6"
+          data-ui-interactive="true"
+          className="fixed bottom-4 left-4 z-40 max-w-md rounded-2xl bg-[#27231F]/95 text-[#FFFCF6] border border-[#C9A66B]/65 p-4 shadow-2xl backdrop-blur-md pointer-events-auto"
         >
-          <div className="max-w-xl w-full bg-[#FFFCF6] border-2 border-[#D6A15D] rounded-3xl p-6 sm:p-8 shadow-2xl text-[#27231F] space-y-5">
-            <div className="flex items-start gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-[#D6A15D]/20 border border-[#D6A15D] flex items-center justify-center shrink-0 text-[#854D27]">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="text-[11px] font-mono-tabular uppercase tracking-widest text-[#854D27] block">
-                  {webglContextLost
-                    ? '3D Graphics Context Paused'
-                    : 'Interactive Museum Fallback Mode'}
-                </span>
-                <h2 className="font-serif-display text-2xl font-bold text-[#27231F] mt-0.5">
-                  {webglContextLost
-                    ? 'Restoring 3D Museum Renderer'
-                    : `${resolveMuseumDisplayName(museumSettings.projectName)} Directory`}
-                </h2>
-                <p className="text-xs text-[#493629] mt-1 leading-relaxed">
-                  {webglError ||
-                    'The browser temporarily reclaimed the WebGL graphics context. You can restore the 3D museum view or open any gallery room directly below.'}
-                </p>
-              </div>
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-[#C9A66B]/20 border border-[#C9A66B]/60 flex items-center justify-center shrink-0 text-[#FFE2B5]">
+              <AlertTriangle className="w-4 h-4" />
             </div>
-
-            <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[#493629]">
-                Active Gallery Rooms ({currentFloorObj?.name || 'Floor 1'})
+            <div className="min-w-0 flex-1">
+              <span className="text-[10px] font-mono-tabular uppercase tracking-widest text-[#C9A66B] block">
+                {webglContextLost
+                  ? '3D Renderer Recovery'
+                  : 'Renderer Notice'}
+              </span>
+              <h2 className="font-serif-display text-base font-semibold text-[#FFE2B5]">
+                {webglContextLost
+                  ? 'Restore 3D Museum Renderer'
+                  : `${resolveMuseumDisplayName(museumSettings.projectName)} Quick Access`}
+              </h2>
+              <p className="text-xs text-[#E8DED0]/85 mt-0.5 leading-relaxed">
+                {webglError ||
+                  'The browser paused the 3D WebGL context. Click below to restore the live 3D scene or enter a room directly.'}
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {rooms
-                  .filter(
-                    (r) =>
-                      r.floorNumber === (currentFloorObj?.floorNumber ?? 0),
-                  )
-                  .map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => {
-                        if (r.status === 'active') onSelectRoom(r.id);
-                        else if (r.status === 'empty')
-                          onOpenCreateRoomInSlot(r.floorId, r.slotIndex, r);
-                      }}
-                      className="px-3.5 py-2.5 rounded-xl border border-[#E8DED0] bg-[#F6F1E8] hover:border-[#D6A15D] text-left transition-colors cursor-pointer"
-                    >
-                      <p className="font-serif-display font-semibold text-sm text-[#27231F] truncate">
-                        {r.name}
-                      </p>
-                      <p className="text-[11px] text-[#493629] truncate">
-                        {r.status === 'active'
-                          ? 'Click to enter exhibition'
-                          : r.status === 'empty'
-                            ? '＋ Create room in slot'
-                            : 'Disabled room'}
-                      </p>
-                    </button>
-                  ))}
-              </div>
             </div>
+          </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#E8DED0]">
-              <button
-                type="button"
-                onClick={() => onSelectWallFeature('museum_settings')}
-                className="px-4 py-2 rounded-xl border border-[#D6A15D] text-xs font-semibold text-[#493629] hover:bg-[#F6F1E8] cursor-pointer"
-              >
-                Open Feature Wall Hub
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setWebglError(null);
-                  setWebglContextLost(false);
-                  setSceneRetryNonce((n) => n + 1);
-                }}
-                className="px-4 py-2 rounded-xl bg-[#27231F] text-[#FDE68A] hover:bg-[#493629] text-xs font-semibold flex items-center gap-2 cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Retry 3D Museum
-              </button>
-            </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setWebglError(null);
+                setWebglContextLost(false);
+                setSceneRetryNonce((n) => n + 1);
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-[#C9A66B] text-[#27231F] hover:brightness-105 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Restore 3D Renderer
+            </button>
+            {rooms
+              .filter((r) => r.status === 'active')
+              .slice(0, 2)
+              .map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => onSelectRoom(r.id)}
+                  className="px-3 py-1.5 rounded-xl border border-[#C9A66B]/45 bg-[#FFFCF6]/10 hover:bg-[#FFFCF6]/20 text-xs font-medium text-[#FFFCF6] transition-colors cursor-pointer"
+                >
+                  Enter {r.name}
+                </button>
+              ))}
           </div>
         </div>
       )}
@@ -10176,10 +10306,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         !isAnyModalOpen &&
         !walkthroughActive && (
           <>
-            {/* Quick Contextual Park Experiences Bar (top-left inside Childhood Room/Park) */}
+            {/* Quick Contextual Park Experiences Bar (compact top-left inside Childhood Room/Park) */}
             <div
               data-ui-interactive="true"
-              className="fixed top-4 left-4 sm:left-6 z-20 flex flex-wrap items-center gap-1.5 pointer-events-auto"
+              className="fixed top-3.5 left-3.5 sm:left-5 z-20 flex flex-wrap items-center gap-1 pointer-events-auto"
             >
               <button
                 type="button"
@@ -10188,13 +10318,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     ? handleStopBicycleRide()
                     : handleOpenStationExperience('bicycle')
                 }
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm backdrop-blur-md transition-all cursor-pointer ${
                   bicycleRideActive || activeContextualStation === 'bicycle'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/45'
+                    : 'bg-[#27231F]/80 hover:bg-[#27231F]/92 text-[#FFFCF6] border-[#C9A66B]/35'
                 }`}
               >
-                <Bike className="w-3.5 h-3.5" />
+                <Bike className="w-3 h-3" />
                 <span>{bicycleRideActive ? 'Riding Trail' : 'Bicycle Trail'}</span>
               </button>
 
@@ -10205,14 +10335,14 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     prev === 'treehouse' ? null : 'treehouse',
                   )
                 }
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm backdrop-blur-md transition-all cursor-pointer ${
                   activeContextualStation === 'treehouse' ||
                   activeSpaceId === 'treehouse'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/45'
+                    : 'bg-[#27231F]/80 hover:bg-[#27231F]/92 text-[#FFFCF6] border-[#C9A66B]/35'
                 }`}
               >
-                <TreePine className="w-3.5 h-3.5" />
+                <TreePine className="w-3 h-3" />
                 <span>Treehouse</span>
               </button>
 
@@ -10223,13 +10353,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     prev === 'cinema' ? null : 'cinema',
                   )
                 }
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm backdrop-blur-md transition-all cursor-pointer ${
                   activeContextualStation === 'cinema'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/45'
+                    : 'bg-[#27231F]/80 hover:bg-[#27231F]/92 text-[#FFFCF6] border-[#C9A66B]/35'
                 }`}
               >
-                <Tv className="w-3.5 h-3.5" />
+                <Tv className="w-3 h-3" />
                 <span>Outdoor Cinema</span>
               </button>
 
@@ -10240,13 +10370,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     prev === 'radio' ? null : 'radio',
                   )
                 }
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm backdrop-blur-md transition-all cursor-pointer ${
                   activeContextualStation === 'radio'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/45'
+                    : 'bg-[#27231F]/80 hover:bg-[#27231F]/92 text-[#FFFCF6] border-[#C9A66B]/35'
                 }`}
               >
-                <Radio className="w-3.5 h-3.5" />
+                <Radio className="w-3 h-3" />
                 <span>Memory Radio</span>
               </button>
 
@@ -10257,13 +10387,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     prev === 'garden' ? null : 'garden',
                   )
                 }
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-md transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm backdrop-blur-md transition-all cursor-pointer ${
                   activeContextualStation === 'garden'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/45'
+                    : 'bg-[#27231F]/80 hover:bg-[#27231F]/92 text-[#FFFCF6] border-[#C9A66B]/35'
                 }`}
               >
-                <Flower2 className="w-3.5 h-3.5" />
+                <Flower2 className="w-3 h-3" />
                 <span>Memory Garden</span>
               </button>
             </div>

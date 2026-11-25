@@ -698,50 +698,56 @@ export function buildChildhoodParkEnvironment({
   flowerHeadsCream.instanceMatrix.needsUpdate = true;
   park.add(flowerStems, flowerHeadsGold, flowerHeadsCoral, flowerHeadsCream);
 
-  // Entrance arbor and a small readable sign make the park feel like a destination.
+  // Architectural entrance arbor with slim high-mounted walnut & champagne-brass lintel (100% unobstructed eye-level sightline into the park).
   const gate = new THREE.Group();
   gate.name = 'childhood_park_entrance_arbor';
   gate.position.set(0, 0, 6.72);
-  const gatePostGeo = track(new THREE.BoxGeometry(0.16, 2.85, 0.18));
-  const gateCollarGeo = track(new THREE.BoxGeometry(0.21, 0.08, 0.23));
-  [-1.85, 1.85].forEach((x) => {
+  const gatePostGeo = track(new THREE.BoxGeometry(0.16, 3.12, 0.18));
+  const gateCollarGeo = track(new THREE.BoxGeometry(0.22, 0.08, 0.24));
+  [-2.18, 2.18].forEach((x) => {
     const post = new THREE.Mesh(gatePostGeo, woodMat);
-    post.position.set(x, 1.42, 0);
+    post.position.set(x, 1.56, 0);
     post.castShadow = enableShadows;
     gate.add(post);
 
+    const baseCollar = new THREE.Mesh(gateCollarGeo, brassMat);
+    baseCollar.position.set(x, 0.08, 0);
+    gate.add(baseCollar);
+
     const collar = new THREE.Mesh(gateCollarGeo, brassMat);
-    collar.position.set(x, 2.74, 0);
+    collar.position.set(x, 2.94, 0);
     gate.add(collar);
   });
-  const gateTop = new THREE.Mesh(track(new THREE.BoxGeometry(3.95, 0.18, 0.22)), woodLightMat);
-  gateTop.position.set(0, 2.8, 0);
+  const gateTop = new THREE.Mesh(track(new THREE.BoxGeometry(4.68, 0.18, 0.24)), woodLightMat);
+  gateTop.position.set(0, 3.06, 0);
   gate.add(gateTop);
+
+  const gateBrassTrim = new THREE.Mesh(track(new THREE.BoxGeometry(4.72, 0.035, 0.26)), brassMat);
+  gateBrassTrim.position.set(0, 2.96, 0);
+  gate.add(gateBrassTrim);
+
   const signCanvas = document.createElement('canvas');
   signCanvas.width = 768;
-  signCanvas.height = 256;
+  signCanvas.height = 128;
   const signCtx = signCanvas.getContext('2d');
   if (signCtx) {
-    signCtx.fillStyle = '#F4E8D2';
-    signCtx.fillRect(0, 0, 768, 256);
-    signCtx.strokeStyle = '#A98255';
-    signCtx.lineWidth = 8;
-    signCtx.strokeRect(12, 12, 744, 232);
-    signCtx.fillStyle = '#4B5E45';
+    signCtx.fillStyle = '#3B281B';
+    signCtx.fillRect(0, 0, 768, 128);
+    signCtx.strokeStyle = '#C9A66B';
+    signCtx.lineWidth = 6;
+    signCtx.strokeRect(8, 8, 752, 112);
+    signCtx.fillStyle = '#FFF7E8';
     signCtx.textAlign = 'center';
-    signCtx.font = 'bold 46px Georgia';
-    signCtx.fillText('CHILDHOOD MEMORY PARK', 384, 108);
-    signCtx.font = '26px Georgia';
-    signCtx.fillStyle = '#76543A';
-    signCtx.fillText('little moments · big worlds', 384, 166);
+    signCtx.font = '600 34px "Cormorant Garamond", Georgia, serif';
+    signCtx.fillText('CHILDHOOD MEMORY PARK', 384, 76);
   }
   const signTexture = track(new THREE.CanvasTexture(signCanvas));
   signTexture.colorSpace = THREE.SRGBColorSpace;
   const signBoard = new THREE.Mesh(
-    track(new THREE.PlaneGeometry(3.35, 1.02)),
-    track(new THREE.MeshStandardMaterial({ map: signTexture, roughness: 0.82 })),
+    track(new THREE.PlaneGeometry(2.35, 0.34)),
+    track(new THREE.MeshStandardMaterial({ map: signTexture, roughness: 0.65 })),
   );
-  signBoard.position.set(0, 2.02, 0.13);
+  signBoard.position.set(0, 3.06, 0.13);
   gate.add(signBoard);
   park.add(gate);
 
