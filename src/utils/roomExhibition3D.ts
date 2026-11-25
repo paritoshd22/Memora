@@ -1984,15 +1984,58 @@ export function buildExhibitionRoom3DScene(params: {
       placeholderSubtitle: string,
     ) => {
       if (mem) {
+        const validCustomUrl =
+          mem.customImageUrl && !mem.customImageUrl.startsWith('idb://')
+            ? mem.customImageUrl
+            : mem.mediaUrl &&
+                !mem.mediaUrl.startsWith('idb://') &&
+                (mem.mediaUrl.startsWith('data:image/') ||
+                  mem.mediaUrl.startsWith('blob:') ||
+                  /^https?:\/\//i.test(mem.mediaUrl))
+              ? mem.mediaUrl
+              : undefined;
         const imgUrl =
-          mem.customImageUrl ||
+          validCustomUrl ||
           getProceduralMemoryArt(mem.motif, mem.palette, mem.title, mem.location);
         const img = new Image();
         img.crossOrigin = 'anonymous';
-        const tex = track(new THREE.Texture(img));
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.anisotropy = maxAnisotropy;
         img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 512;
+          canvas.height = 384;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            // Archival linen mat board backing
+            ctx.fillStyle = '#FAF5EB';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const pad = 16;
+            const availW = canvas.width - pad * 2;
+            const availH = canvas.height - pad * 2;
+            const natW = Math.max(1, img.naturalWidth || img.width || availW);
+            const natH = Math.max(1, img.naturalHeight || img.height || availH);
+            const scale = Math.min(availW / natW, availH / natH);
+            const drawW = natW * scale;
+            const drawH = natH * scale;
+            const drawX = (canvas.width - drawW) * 0.5;
+            const drawY = (canvas.height - drawH) * 0.5;
+
+            ctx.drawImage(img, drawX, drawY, drawW, drawH);
+
+            // Subtle champagne-brass inner mat bevel
+            ctx.strokeStyle = 'rgba(201, 166, 107, 0.58)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(
+              drawX - 1,
+              drawY - 1,
+              drawW + 2,
+              drawH + 2,
+            );
+          }
+
+          const tex = track(new THREE.CanvasTexture(canvas));
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.anisotropy = maxAnisotropy;
           tex.needsUpdate = true;
           targetMat.map = tex;
           if ('emissiveMap' in targetMat) {

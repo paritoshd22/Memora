@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { HelpCircle, Music, Settings, User, Volume2, VolumeX } from 'lucide-react';
+import { HelpCircle, Music, Settings, User, Volume2, VolumeX, X } from 'lucide-react';
 import {
   ActiveNavTab,
   ArtworkMotif,
@@ -173,11 +173,11 @@ class AtriumErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="fixed bottom-4 left-4 z-40 max-w-sm rounded-2xl bg-[#27231F]/95 text-[#FFFCF6] border border-[#C9A66B]/60 p-4 shadow-2xl backdrop-blur-md">
+        <div className="fixed bottom-4 left-4 z-40 max-w-sm rounded-2xl bg-[#27231F] text-[#FFFCF6] border border-[#C9A66B]/60 p-4 shadow-2xl">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-[10px] font-mono-tabular uppercase tracking-widest text-[#C9A66B]">
-                Renderer Recovery
+                3D View Recovery
               </p>
               <h2 className="font-serif-display text-base font-semibold text-[#FFE2B5] mt-0.5">
                 Restore 3D Museum View
@@ -186,6 +186,14 @@ class AtriumErrorBoundary extends React.Component<
                 A temporary graphics interruption occurred. Your memories and galleries remain intact.
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false })}
+              aria-label="Dismiss recovery notice"
+              className="p-1 rounded-lg text-[#E8DED0]/70 hover:text-[#FFFCF6] hover:bg-white/10 cursor-pointer shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
@@ -2715,7 +2723,7 @@ export default function App() {
                   className={`w-1.5 h-1.5 rounded-full ${
                     isMusicPlayerOpen
                       ? 'bg-[#27231F]'
-                      : 'bg-[#87977C] animate-pulse'
+                      : 'bg-[#87977C]'
                   }`}
                 />
               )}

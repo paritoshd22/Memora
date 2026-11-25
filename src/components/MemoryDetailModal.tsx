@@ -143,7 +143,7 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
 }) => {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [fitContain, setFitContain] = useState(false);
+  const [fitContain, setFitContain] = useState(true);
   const [isPanoramaView, setIsPanoramaView] = useState(false);
   const [panoOffset, setPanoOffset] = useState<{ x: number; y: number }>({
     x: 50,
@@ -246,9 +246,8 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [memory, hasPrev, hasNext, onClose, onPrev, onNext, isEditing]);
 
-  const imageSrc = useMemo(() => {
+  const fallbackProceduralArt = useMemo(() => {
     if (!memory) return '';
-    if (memory.customImageUrl) return memory.customImageUrl;
     return getProceduralMemoryArt(
       memory.motif,
       memory.palette,
@@ -256,6 +255,26 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
       memory.location,
     );
   }, [memory]);
+
+  const imageSrc = useMemo(() => {
+    if (!memory) return '';
+    if (
+      memory.customImageUrl &&
+      !memory.customImageUrl.startsWith('idb://')
+    ) {
+      return memory.customImageUrl;
+    }
+    if (
+      memory.mediaUrl &&
+      !memory.mediaUrl.startsWith('idb://') &&
+      (memory.mediaUrl.startsWith('data:image/') ||
+        memory.mediaUrl.startsWith('blob:') ||
+        /^https?:\/\//i.test(memory.mediaUrl))
+    ) {
+      return memory.mediaUrl;
+    }
+    return fallbackProceduralArt;
+  }, [memory, fallbackProceduralArt]);
 
   const playableVideoSrc = useMemo(() => {
     if (!memory) return null;
@@ -845,9 +864,17 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
                         src={imageSrc}
                         alt={memory.title}
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          if (
+                            fallbackProceduralArt &&
+                            e.currentTarget.src !== fallbackProceduralArt
+                          ) {
+                            e.currentTarget.src = fallbackProceduralArt;
+                          }
+                        }}
                         className={`w-full aspect-4/3 ${
                           fitContain
-                            ? 'object-contain bg-[#1E1610]'
+                            ? 'object-contain bg-[#FAF5EB]'
                             : 'object-cover'
                         } rounded border border-[#E8DED0]`}
                       />

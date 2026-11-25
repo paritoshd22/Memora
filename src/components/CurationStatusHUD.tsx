@@ -4,6 +4,8 @@ import {
   Archive,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   FolderOpen,
   Image as ImageIcon,
   Loader2,
@@ -76,6 +78,7 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
   onEnterChildhoodPark,
 }) => {
   const [draftEdits, setDraftEdits] = useState<Record<string, DraftEdits>>({});
+  const [isMinimized, setIsMinimized] = useState(false);
 
   useEffect(() => {
     if (!batchState) return;
@@ -93,6 +96,28 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
       }
       return next;
     });
+  }, [batchState]);
+
+  useEffect(() => {
+    if (!batchState) return;
+    const reviewDone = batchState.items.filter(
+      (it) => it.status === 'done' && Boolean(it.memoryId),
+    );
+    const pendingApproval = reviewDone.filter((it) => !it.placementApproved);
+    const failed = batchState.items.filter((it) => it.status === 'failed');
+    if (
+      batchState.phase === 'ready' &&
+      pendingApproval.length === 0 &&
+      failed.length === 0
+    ) {
+      setIsMinimized(true);
+    } else if (
+      batchState.phase === 'review' ||
+      batchState.phase === 'error' ||
+      pendingApproval.length > 0
+    ) {
+      setIsMinimized(false);
+    }
   }, [batchState]);
 
   if (!batchState || batchState.phase === 'idle') return null;
@@ -159,10 +184,14 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
     <aside
       aria-live="polite"
       aria-label="Memory Curation and Placement Review"
-      className="fixed top-20 right-4 md:right-6 z-30 w-[min(430px,calc(100vw-2rem))] max-h-[calc(100vh-6.5rem)] flex flex-col rounded-2xl bg-[#FFFCF6] border border-[#D8C5A6] shadow-2xl text-[#27231F] overflow-hidden"
+      className={`fixed top-16 right-4 md:right-6 z-30 ${
+        isMinimized
+          ? 'w-[min(340px,calc(100vw-2rem))]'
+          : 'w-[min(410px,calc(100vw-2rem))] max-h-[calc(100vh-5.5rem)]'
+      } flex flex-col rounded-2xl bg-[#FFFCF6] border border-[#D8C5A6] shadow-2xl text-[#27231F] overflow-hidden transition-all`}
     >
       {/* Top Progress Header */}
-      <div className="p-4 border-b border-[#EFE6D5] shrink-0">
+      <div className="p-3.5 border-b border-[#EFE6D5] shrink-0">
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             {isRunning ? (
@@ -173,26 +202,42 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
               <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
             )}
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-[#854D27]">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-[#854D27]">
                 MEMORA Curator · Stage {Math.min(PHASE_STEPS.length, currentStepIndex + 1)} of {PHASE_STEPS.length}
               </p>
-              <h3 className="font-serif-display text-base font-semibold text-[#27231F] truncate">
+              <h3 className="font-serif-display text-sm font-semibold text-[#27231F] truncate">
                 {batchState.phaseLabel}
               </h3>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onDismiss}
-            aria-label="Dismiss curation panel"
-            className="p-1 rounded-lg text-[#6E5641] hover:bg-[#F3ECE0] cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsMinimized((prev) => !prev)}
+              aria-label={isMinimized ? 'Expand curation panel' : 'Minimize curation panel'}
+              title={isMinimized ? 'Expand curation panel' : 'Minimize curation panel'}
+              className="p-1 rounded-lg text-[#6E5641] hover:bg-[#F3ECE0] cursor-pointer"
+            >
+              {isMinimized ? (
+                <ChevronDown className="w-4 h-4" />
+              ) : (
+                <ChevronUp className="w-4 h-4" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label="Dismiss curation panel"
+              title="Close panel"
+              className="p-1 rounded-lg text-[#6E5641] hover:bg-[#F3ECE0] cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* 8-Stage Discrete Progress Bar */}
-        <div className="mt-3">
+        <div className="mt-2.5">
           <div className="grid grid-cols-8 gap-1">
             {PHASE_STEPS.map((step, idx) => {
               const done =
@@ -230,9 +275,30 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
             </span>
           </div>
         </div>
+
+        {isMinimized && normalizedPhase === 'ready' && onEnterChildhoodPark && (
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onEnterChildhoodPark}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#27231F] text-[#FFFCF6] hover:bg-[#3A2F26] cursor-pointer"
+            >
+              <MapPin className="w-3.5 h-3.5 text-[#D6A15D]" />
+              Explore in 3D Park
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsMinimized(false)}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#F6F1E8] border border-[#D4C3AA] text-[#493629] hover:bg-[#EFE6D5] cursor-pointer"
+            >
+              Details
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Scrollable Body */}
+      {!isMinimized && (
       <div className="p-4 space-y-3 overflow-y-auto">
         {/* Running Checklist */}
         {isRunning && (
@@ -555,6 +621,7 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
           </div>
         )}
       </div>
+      )}
     </aside>
   );
 };

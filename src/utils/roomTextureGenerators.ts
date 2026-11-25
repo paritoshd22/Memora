@@ -576,8 +576,18 @@ export function createOpenScrapbookPagesTexture(
       const snippet = (mem.story || mem.description || '').slice(0, box.w > 220 ? 48 : 24);
       ctx.fillText(snippet, box.x + 12, box.y + box.h * 0.92);
 
+      const validCustomUrl =
+        mem.customImageUrl && !mem.customImageUrl.startsWith('idb://')
+          ? mem.customImageUrl
+          : mem.mediaUrl &&
+              !mem.mediaUrl.startsWith('idb://') &&
+              (mem.mediaUrl.startsWith('data:image/') ||
+                mem.mediaUrl.startsWith('blob:') ||
+                /^https?:\/\//i.test(mem.mediaUrl))
+            ? mem.mediaUrl
+            : undefined;
       const imgUrl =
-        mem.customImageUrl ||
+        validCustomUrl ||
         getProceduralMemoryArt(mem.motif, mem.palette, mem.title, mem.location);
       if (imgUrl) {
         const photoImg = new Image();
@@ -587,7 +597,23 @@ export function createOpenScrapbookPagesTexture(
           ctx.beginPath();
           ctx.rect(imgX, imgY, imgW, imgH);
           ctx.clip();
-          ctx.drawImage(photoImg, imgX, imgY, imgW, imgH);
+
+          // Warm museum archival mat backing so portrait & panoramic photos are never stretched
+          ctx.fillStyle = '#FAF5EB';
+          ctx.fillRect(imgX, imgY, imgW, imgH);
+
+          const natW = Math.max(1, photoImg.naturalWidth || photoImg.width || imgW);
+          const natH = Math.max(1, photoImg.naturalHeight || photoImg.height || imgH);
+          const scale = Math.min(imgW / natW, imgH / natH);
+          const drawW = natW * scale;
+          const drawH = natH * scale;
+          const drawX = imgX + (imgW - drawW) * 0.5;
+          const drawY = imgY + (imgH - drawH) * 0.5;
+
+          ctx.drawImage(photoImg, drawX, drawY, drawW, drawH);
+          ctx.strokeStyle = 'rgba(201, 166, 107, 0.5)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(drawX + 0.5, drawY + 0.5, Math.max(1, drawW - 1), Math.max(1, drawH - 1));
           ctx.restore();
           tex.needsUpdate = true;
         };
