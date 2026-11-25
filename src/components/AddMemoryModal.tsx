@@ -47,6 +47,8 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+  const stagedFilesRef = useRef<StagedUploadItem[]>([]);
 
   const [isDragging, setIsDragging] = useState(false);
   const [isPreparingFiles, setIsPreparingFiles] = useState(false);
@@ -62,18 +64,44 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   const [prepFeedback, setPrepFeedback] = useState<string | null>(null);
   const [validationNotices, setValidationNotices] = useState<string[]>([]);
 
+  useEffect(() => {
+    stagedFilesRef.current = stagedFiles;
+  }, [stagedFiles]);
+
   const revokeStagedPreviews = (items: StagedUploadItem[]) => {
     items.forEach((it) => {
-      if (it.previewUrl) URL.revokeObjectURL(it.previewUrl);
+      if (it?.previewUrl) {
+        try {
+          URL.revokeObjectURL(it.previewUrl);
+        } catch {
+          // ignore
+        }
+      }
     });
   };
 
   const stopCameraStream = () => {
     if (activeStreamRef.current) {
-      activeStreamRef.current.getTracks().forEach((t) => t.stop());
+      activeStreamRef.current.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch {
+          // ignore
+        }
+      });
       activeStreamRef.current = null;
     }
-    setCameraActive(false);
+    if (videoPreviewRef.current) {
+      try {
+        videoPreviewRef.current.pause();
+        videoPreviewRef.current.srcObject = null;
+      } catch {
+        // ignore
+      }
+    }
+    if (isMountedRef.current) {
+      setCameraActive(false);
+    }
   };
 
   useEffect(() => {
@@ -105,8 +133,11 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   }, [isOpen, onClose]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
       stopCameraStream();
+      revokeStagedPreviews(stagedFilesRef.current);
     };
   }, []);
 
@@ -173,7 +204,10 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
     try {
       const prepared: CurationBatchItemInput[] = [];
       for (let idx = 0; idx < stagedFiles.length; idx++) {
-        const { file } = stagedFiles[idx];
+        if (!isMountedRef.current) return;
+        const stagedItem = stagedFiles[idx];
+        if (!stagedItem?.file) continue;
+        const { file } = stagedItem;
         setPrepFeedback(
           `Preserving original (${idx + 1}/${stagedFiles.length}): ${file.name}`,
         );
@@ -190,12 +224,23 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         prepared.push(item);
       }
 
+      if (!isMountedRef.current) return;
       if (prepared.length > 0) {
         onStartAutoCuration(prepared);
         onClose();
       }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setValidationNotices([
+          err instanceof Error
+            ? err.message
+            : 'Unable to prepare one or more selected files. Please try again.',
+        ]);
+      }
     } finally {
-      setIsPreparingFiles(false);
+      if (isMountedRef.current) {
+        setIsPreparingFiles(false);
+      }
     }
   };
 
@@ -224,37 +269,50 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         video: { facingMode: 'environment' },
         audio: false,
       });
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       activeStreamRef.current = stream;
       setCameraActive(true);
       requestAnimationFrame(() => {
-        if (videoPreviewRef.current) {
+        if (isMountedRef.current && videoPreviewRef.current) {
           videoPreviewRef.current.srcObject = stream;
           void videoPreviewRef.current.play().catch(() => {});
         }
       });
     } catch {
-      setCameraError(
-        'Camera permission was denied or unavailable. You can still drag and drop photos anytime.',
-      );
+      if (isMountedRef.current) {
+        setCameraError(
+          'Camera permission was denied or unavailable. You can still drag and drop photos anytime.',
+        );
+      }
     }
   };
 
   const handleCapturePhoto = async () => {
     const video = videoPreviewRef.current;
     if (!video || !onStartAutoCuration) return;
-    const w = video.videoWidth || 1280;
-    const h = video.videoHeight || 720;
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, w, h);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-    stopCameraStream();
-    const item = await prepareCameraCaptureForAutoCuration(dataUrl);
-    onStartAutoCuration([item]);
-    onClose();
+    try {
+      const w = video.videoWidth || 1280;
+      const h = video.videoHeight || 720;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      stopCameraStream();
+      const item = await prepareCameraCaptureForAutoCuration(dataUrl);
+      if (!isMountedRef.current) return;
+      onStartAutoCuration([item]);
+      onClose();
+    } catch {
+      if (isMountedRef.current) {
+        setCameraError('Could not capture photo from camera feed. Please try again.');
+      }
+    }
   };
 
   return (
@@ -262,9 +320,9 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-memories-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1E150F]/80"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#18110B]/80 backdrop-blur-sm museum-fade-in"
     >
-      <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl bg-[#FFFCF6] border border-[#D8C5A6] shadow-2xl overflow-hidden text-[#27231F]">
+      <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl bg-[#FFFCF6] border border-[#D8C5A6] shadow-2xl overflow-hidden text-[#27231F] museum-panel-enter">
         {/* Header */}
         <div className="px-6 py-4 border-b border-[#E8DED0] bg-[#FAF4E8] flex items-start justify-between gap-4 shrink-0">
           <div>

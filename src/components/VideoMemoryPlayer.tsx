@@ -7,6 +7,8 @@ import {
   Maximize2,
   Minimize2,
   Film,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 
 interface VideoMemoryPlayerProps {
@@ -18,6 +20,7 @@ interface VideoMemoryPlayerProps {
   hoverPreview?: boolean;
   aspectClassName?: string;
   onLoadedData?: () => void;
+  onPlayStateChange?: (isPlaying: boolean) => void;
 }
 
 function formatMediaTime(seconds: number): string {
@@ -37,9 +40,11 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
   hoverPreview = variant === 'card',
   aspectClassName = 'aspect-16/10',
   onLoadedData,
+  onPlayStateChange,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const isMountedRef = useRef<boolean>(true);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(defaultMuted);
@@ -47,17 +52,30 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [userInitiatedPlay, setUserInitiatedPlay] = useState(false);
+  const [isVideoLoading, setIsVideoLoading] = useState(Boolean(src));
+  const [videoError, setVideoError] = useState<string | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Sync mute state and safely pause/clean up media resources on unmount or src change
   useEffect(() => {
     const videoEl = videoRef.current;
-    if (!videoEl) return;
-    videoEl.muted = defaultMuted;
     setIsMuted(defaultMuted);
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
     setUserInitiatedPlay(false);
+    setIsVideoLoading(Boolean(src));
+    setVideoError(null);
+    onPlayStateChange?.(false);
+
+    if (!videoEl) return;
+    videoEl.muted = defaultMuted;
 
     return () => {
       try {
@@ -70,6 +88,7 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
+      if (!isMountedRef.current) return;
       const fsElem = document.fullscreenElement;
       setIsFullscreen(
         Boolean(fsElem && containerRef.current && containerRef.current.contains(fsElem)),
@@ -81,17 +100,20 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
     };
   }, []);
 
-  const togglePlay = (e?: React.MouseEvent) => {
+  const togglePlay = (e?: React.MouseEvent | React.KeyboardEvent) => {
     if (e) e.stopPropagation();
     const videoEl = videoRef.current;
-    if (!videoEl) return;
+    if (!videoEl || !src) return;
 
     if (videoEl.paused || videoEl.ended) {
       setUserInitiatedPlay(true);
       const p = videoEl.play();
       if (p && typeof p.catch === 'function') {
         p.catch(() => {
-          setIsPlaying(false);
+          if (isMountedRef.current) {
+            setIsPlaying(false);
+            onPlayStateChange?.(false);
+          }
         });
       }
     } else {
@@ -100,8 +122,8 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
     }
   };
 
-  const toggleMute = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const toggleMute = (e?: React.MouseEvent | React.KeyboardEvent) => {
+    if (e) e.stopPropagation();
     const videoEl = videoRef.current;
     if (!videoEl) return;
     const nextMuted = !videoEl.muted;
@@ -118,8 +140,8 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
     setCurrentTime(nextTime);
   };
 
-  const toggleFullscreen = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const toggleFullscreen = (e?: React.MouseEvent | React.KeyboardEvent) => {
+    if (e) e.stopPropagation();
     const targetEl = containerRef.current || videoRef.current;
     if (!targetEl) return;
 
@@ -132,10 +154,35 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    if (e.key === ' ' || e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      togglePlay(e);
+    } else if (e.key.toLowerCase() === 'm') {
+      e.preventDefault();
+      toggleMute(e);
+    } else if (e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      toggleFullscreen(e);
+    } else if (e.key === 'ArrowRight' && duration > 0) {
+      e.preventDefault();
+      const next = Math.min(duration, videoEl.currentTime + 5);
+      videoEl.currentTime = next;
+      setCurrentTime(next);
+    } else if (e.key === 'ArrowLeft' && duration > 0) {
+      e.preventDefault();
+      const next = Math.max(0, videoEl.currentTime - 5);
+      videoEl.currentTime = next;
+      setCurrentTime(next);
+    }
+  };
+
   const handleMouseEnter = () => {
     if (!hoverPreview || userInitiatedPlay) return;
     const videoEl = videoRef.current;
-    if (!videoEl) return;
+    if (!videoEl || !src) return;
     videoEl.muted = true;
     setIsMuted(true);
     const p = videoEl.play();
@@ -148,7 +195,11 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
     if (!hoverPreview || userInitiatedPlay) return;
     const videoEl = videoRef.current;
     if (!videoEl) return;
-    videoEl.pause();
+    try {
+      videoEl.pause();
+    } catch {
+      // ignore
+    }
   };
 
   const progressPercent =
@@ -157,10 +208,51 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
   return (
     <div
       ref={containerRef}
+      tabIndex={0}
+      role="region"
+      aria-label={`Video player for ${title}`}
+      onKeyDown={handleKeyDown}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative w-full ${aspectClassName} bg-[#18110B] rounded-lg overflow-hidden group/video select-none`}
+      className={`relative w-full ${aspectClassName} bg-[#18110B] rounded-xl overflow-hidden group/video select-none border border-[#D6A15D]/30 shadow-inner focus-visible:ring-2 focus-visible:ring-[#D6A15D]`}
     >
+      {/* Loading Shimmer / Spinner */}
+      {isVideoLoading && !videoError && (
+        <div
+          aria-live="polite"
+          className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-[#18110B]/70 backdrop-blur-xs museum-fade-in"
+        >
+          <Loader2 className="w-6 h-6 text-[#D6A15D] animate-spin" />
+          <span className="text-[11px] font-mono-tabular uppercase tracking-widest text-[#E9D4B1]/90">
+            Loading Film Reel…
+          </span>
+        </div>
+      )}
+
+      {/* Video Error Graceful Fallback */}
+      {videoError && (
+        <div
+          role="status"
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-[#18110B]/95 p-4 text-center"
+        >
+          <AlertCircle className="w-6 h-6 text-[#D6A15D]" />
+          <p className="font-serif-display text-sm font-semibold text-[#FFE2B5]">
+            {title}
+          </p>
+          <p className="text-[11px] text-[#E8DED0]/80 max-w-xs">
+            {videoError}
+          </p>
+        </div>
+      )}
+
+      {/* Archival Poster Backdrop when no poster image is provided */}
+      {!poster && !isPlaying && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-[#27231F] via-[#1C150F] to-[#120D09] opacity-60"
+        />
+      )}
+
       <video
         ref={videoRef}
         src={src}
@@ -170,26 +262,54 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
         preload="metadata"
         aria-label={`Video memory: ${title}`}
         onLoadedMetadata={(e) => {
-          const d = e.currentTarget.duration;
+          if (!isMountedRef.current) return;
+          const d = e.currentTarget?.duration;
           if (Number.isFinite(d) && d > 0) setDuration(d);
+          setIsVideoLoading(false);
           onLoadedData?.();
         }}
-        onLoadedData={() => onLoadedData?.()}
-        onTimeUpdate={(e) => {
-          setCurrentTime(e.currentTarget.currentTime);
+        onLoadedData={() => {
+          if (!isMountedRef.current) return;
+          setIsVideoLoading(false);
+          onLoadedData?.();
         }}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onCanPlay={() => {
+          if (!isMountedRef.current) return;
+          setIsVideoLoading(false);
+        }}
+        onError={() => {
+          if (!isMountedRef.current) return;
+          setIsVideoLoading(false);
+          setVideoError('Unable to decode video stream in this browser session.');
+        }}
+        onTimeUpdate={(e) => {
+          if (!isMountedRef.current) return;
+          setCurrentTime(e.currentTarget?.currentTime || 0);
+        }}
+        onPlay={() => {
+          if (!isMountedRef.current) return;
+          setIsPlaying(true);
+          onPlayStateChange?.(true);
+        }}
+        onPause={() => {
+          if (!isMountedRef.current) return;
+          setIsPlaying(false);
+          onPlayStateChange?.(false);
+        }}
         onEnded={() => {
+          if (!isMountedRef.current) return;
           setIsPlaying(false);
           setUserInitiatedPlay(false);
+          onPlayStateChange?.(false);
         }}
         onClick={(e) => {
           if (variant === 'detail') {
             togglePlay(e);
           }
         }}
-        className={`w-full h-full ${
+        className={`w-full h-full transition-opacity duration-300 ${
+          isVideoLoading ? 'opacity-70' : 'opacity-100'
+        } ${
           variant === 'detail' ? 'object-contain bg-[#120D09]' : 'object-cover'
         }`}
       />
@@ -201,12 +321,12 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
       </div>
 
       {/* Center Play Overlay Button when Paused */}
-      {!isPlaying && (
+      {!isPlaying && !videoError && (
         <button
           type="button"
           onClick={togglePlay}
           aria-label={`Play video: ${title}`}
-          className="absolute inset-0 m-auto w-11 h-11 rounded-full bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border border-[#D6A15D] shadow-lg flex items-center justify-center transition-transform duration-150 hover:scale-105 cursor-pointer z-20"
+          className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-[#27231F]/90 hover:bg-[#3A2B20] active:scale-95 text-[#FFFCF6] border border-[#D6A15D] shadow-xl flex items-center justify-center transition-all duration-150 hover:scale-105 cursor-pointer z-20 focus-visible:ring-2 focus-visible:ring-[#FFE2B5]"
         >
           <Play className="w-4 h-4 fill-[#D6A15D] text-[#D6A15D] ml-0.5" />
         </button>
@@ -216,7 +336,7 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
       <div
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
-        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-[#18110B]/95 via-[#18110B]/80 to-transparent px-3 pt-4 pb-2.5 flex flex-col gap-1.5 transition-opacity duration-150 ${
+        className={`absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-[#18110B]/96 via-[#18110B]/82 to-transparent px-3 pt-4 pb-2.5 flex flex-col gap-1.5 transition-opacity duration-200 ${
           variant === 'card'
             ? isPlaying
               ? 'opacity-100'
@@ -248,8 +368,8 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
               type="button"
               onClick={togglePlay}
               aria-label={isPlaying ? 'Pause video' : 'Play video'}
-              title={isPlaying ? 'Pause' : 'Play'}
-              className="p-1.5 rounded-md bg-[#27231F]/90 hover:bg-[#493629] text-[#E9D4B1] border border-[#D6A15D]/40 transition-colors cursor-pointer"
+              title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+              className="p-1.5 rounded-lg bg-[#27231F]/90 hover:bg-[#493629] active:scale-95 text-[#E9D4B1] border border-[#D6A15D]/40 transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-[#D6A15D]"
             >
               {isPlaying ? (
                 <Pause className="w-3.5 h-3.5 text-[#D6A15D]" />
@@ -262,8 +382,8 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
               type="button"
               onClick={toggleMute}
               aria-label={isMuted ? 'Unmute video audio' : 'Mute video audio'}
-              title={isMuted ? 'Unmute' : 'Mute'}
-              className="p-1.5 rounded-md bg-[#27231F]/90 hover:bg-[#493629] text-[#E9D4B1] border border-[#D6A15D]/40 transition-colors cursor-pointer"
+              title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
+              className="p-1.5 rounded-lg bg-[#27231F]/90 hover:bg-[#493629] active:scale-95 text-[#E9D4B1] border border-[#D6A15D]/40 transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-[#D6A15D]"
             >
               {isMuted ? (
                 <VolumeX className="w-3.5 h-3.5 text-[#C98D87]" />
@@ -282,8 +402,8 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
             type="button"
             onClick={toggleFullscreen}
             aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen video'}
-            title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-            className="p-1.5 rounded-md bg-[#27231F]/90 hover:bg-[#493629] text-[#E9D4B1] border border-[#D6A15D]/40 transition-colors cursor-pointer"
+            title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+            className="p-1.5 rounded-lg bg-[#27231F]/90 hover:bg-[#493629] active:scale-95 text-[#E9D4B1] border border-[#D6A15D]/40 transition-all cursor-pointer focus-visible:ring-2 focus-visible:ring-[#D6A15D]"
           >
             {isFullscreen ? (
               <Minimize2 className="w-3.5 h-3.5 text-[#D6A15D]" />
@@ -296,3 +416,4 @@ export const VideoMemoryPlayer: React.FC<VideoMemoryPlayerProps> = ({
     </div>
   );
 };
+

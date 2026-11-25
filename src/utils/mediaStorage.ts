@@ -86,25 +86,39 @@ export async function saveMediaToIndexedDb(
   dataUrl: string,
   domain?: MediaAssetDomain,
 ): Promise<boolean> {
+  if (!key || !dataUrl) return false;
   try {
     const db = await openMediaDb();
     const storeKey = buildAssetKey(key, domain);
     return await new Promise<boolean>((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.put(dataUrl, storeKey);
-      if (storeKey !== key) {
-        // Also keep primary memoryId key populated for seamless lookup
-        store.put(dataUrl, key);
-      }
-      tx.oncomplete = () => {
-        db.close();
-        resolve(true);
-      };
-      tx.onerror = () => {
-        db.close();
+      try {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        store.put(dataUrl, storeKey);
+        if (storeKey !== key) {
+          // Also keep primary memoryId key populated for seamless lookup
+          store.put(dataUrl, key);
+        }
+        tx.oncomplete = () => {
+          db.close();
+          resolve(true);
+        };
+        tx.onerror = () => {
+          db.close();
+          resolve(false);
+        };
+        tx.onabort = () => {
+          db.close();
+          resolve(false);
+        };
+      } catch {
+        try {
+          db.close();
+        } catch {
+          // ignore
+        }
         resolve(false);
-      };
+      }
     });
   } catch {
     return false;
@@ -115,42 +129,52 @@ export async function loadMediaFromIndexedDb(
   key: string,
   domain?: MediaAssetDomain,
 ): Promise<string | null> {
+  if (!key) return null;
   try {
     const db = await openMediaDb();
     const storeKey = buildAssetKey(key, domain);
     return await new Promise<string | null>((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.get(storeKey);
-      req.onsuccess = () => {
-        if (typeof req.result === 'string' && req.result.length > 0) {
+      try {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.get(storeKey);
+        req.onsuccess = () => {
+          if (typeof req.result === 'string' && req.result.length > 0) {
+            db.close();
+            resolve(req.result);
+            return;
+          }
+          if (storeKey !== key) {
+            const fallbackReq = store.get(key);
+            fallbackReq.onsuccess = () => {
+              db.close();
+              resolve(
+                typeof fallbackReq.result === 'string'
+                  ? fallbackReq.result
+                  : null,
+              );
+            };
+            fallbackReq.onerror = () => {
+              db.close();
+              resolve(null);
+            };
+            return;
+          }
           db.close();
-          resolve(req.result);
-          return;
+          resolve(null);
+        };
+        req.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+      } catch {
+        try {
+          db.close();
+        } catch {
+          // ignore
         }
-        if (storeKey !== key) {
-          const fallbackReq = store.get(key);
-          fallbackReq.onsuccess = () => {
-            db.close();
-            resolve(
-              typeof fallbackReq.result === 'string'
-                ? fallbackReq.result
-                : null,
-            );
-          };
-          fallbackReq.onerror = () => {
-            db.close();
-            resolve(null);
-          };
-          return;
-        }
-        db.close();
         resolve(null);
-      };
-      req.onerror = () => {
-        db.close();
-        resolve(null);
-      };
+      }
     });
   } catch {
     return null;
@@ -161,24 +185,38 @@ export async function deleteMediaFromIndexedDb(
   key: string,
   domain?: MediaAssetDomain,
 ): Promise<boolean> {
+  if (!key) return false;
   try {
     const db = await openMediaDb();
     const storeKey = buildAssetKey(key, domain);
     return await new Promise<boolean>((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      store.delete(storeKey);
-      if (storeKey !== key) {
-        store.delete(key);
-      }
-      tx.oncomplete = () => {
-        db.close();
-        resolve(true);
-      };
-      tx.onerror = () => {
-        db.close();
+      try {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        store.delete(storeKey);
+        if (storeKey !== key) {
+          store.delete(key);
+        }
+        tx.oncomplete = () => {
+          db.close();
+          resolve(true);
+        };
+        tx.onerror = () => {
+          db.close();
+          resolve(false);
+        };
+        tx.onabort = () => {
+          db.close();
+          resolve(false);
+        };
+      } catch {
+        try {
+          db.close();
+        } catch {
+          // ignore
+        }
         resolve(false);
-      };
+      }
     });
   } catch {
     return false;
@@ -970,9 +1008,10 @@ export async function restoreAndReconcileUserMemories(options: {
     pendingDeletedIds,
   );
 
-  // Step 3: Rehydrate any IndexedDB binary media blobs gracefully
+    // Step 3: Rehydrate any IndexedDB binary media blobs gracefully
   const rehydrated: Memory[] = [];
   for (const mem of merged) {
+    if (!mem || !mem.id) continue;
     const needsRehydration =
       mem.id.startsWith('mem-upload-') ||
       mem.mediaUrl?.startsWith('idb://') ||
@@ -981,7 +1020,7 @@ export async function restoreAndReconcileUserMemories(options: {
       mem.customImageUrl?.startsWith('blob:');
 
     if (needsRehydration) {
-      const dataUrl = await loadMediaFromIndexedDb(mem.id);
+      const dataUrl = await loadMediaFromIndexedDb(mem.id).catch(() => null);
       if (dataUrl) {
         rehydrated.push({
           ...mem,

@@ -278,9 +278,20 @@ export const AtriumContextualPanels: React.FC<AtriumContextualPanelsProps> = ({
               </div>
             </div>
           ) : contextualCatalog.cinemaVideos.length === 0 ? (
-            <p className="text-xs text-[#E8DED0]/80">
-              No video memories uploaded yet. Upload MP4 or WebM videos via Add Memories to screen them here.
-            </p>
+            <div className="rounded-xl bg-[#18110B] border border-[#C9A66B]/35 p-4 text-center space-y-2.5">
+              <div className="w-10 h-10 mx-auto rounded-xl bg-[#C9A66B]/15 border border-[#C9A66B]/50 flex items-center justify-center text-[#FFE2B5]">
+                <Tv className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-serif-display text-sm font-semibold text-[#FFE2B5]">
+                  Your Private Screening Corner Awaits
+                </h4>
+                <p className="text-xs text-[#E8DED0]/80 mt-1 leading-relaxed">
+                  No video memories uploaded yet. Upload MP4 or WebM home films via{' '}
+                  <span className="text-[#FFE2B5] font-semibold">+ Add Memory</span> to project them in the 3D Cinema Corner.
+                </p>
+              </div>
+            </div>
           ) : (
             <div className="space-y-2">
               {contextualCatalog.cinemaVideos.map((videoMem) => {

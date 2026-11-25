@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Wand2,
@@ -140,62 +140,87 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
     useState<RoomDesignConfig | null>(null);
   const [appliedRoomBanner, setAppliedRoomBanner] = useState<boolean>(false);
 
-  const fetchProviders = async () => {
+  const isMountedRef = useRef<boolean>(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const fetchProviders = async (signal?: AbortSignal) => {
+    if (!isMountedRef.current) return;
     setLoadingProviders(true);
     try {
-      const res = await fetch('/api/ai/providers');
+      const res = await fetch('/api/ai/providers', { signal });
       if (res.ok) {
-        const data = await res.json();
-        setProviders(data.providers || []);
+        const data = await res.json().catch(() => null);
+        if (isMountedRef.current && data) {
+          setProviders(Array.isArray(data.providers) ? data.providers : []);
+        }
       }
     } catch {
-      // ignore network error
+      // ignore network or abort error
     } finally {
-      setLoadingProviders(false);
+      if (isMountedRef.current) {
+        setLoadingProviders(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchProviders();
+    const controller = new AbortController();
+    void fetchProviders(controller.signal);
+    return () => controller.abort();
   }, []);
 
-  // Demo reel advancement timer
+  // Demo reel advancement timer with cleanup and mount safety
   useEffect(() => {
-    if (!isPlayingDemoReel || !storyboardResult || storyboardResult.scenes.length === 0) {
+    if (!isPlayingDemoReel || !storyboardResult || !Array.isArray(storyboardResult.scenes) || storyboardResult.scenes.length === 0) {
       return;
     }
+    const sceneCount = storyboardResult.scenes.length;
     const timer = window.setInterval(() => {
-      setActiveReelSceneIdx((prev) => (prev + 1) % storyboardResult.scenes.length);
+      if (!isMountedRef.current) return;
+      setActiveReelSceneIdx((prev) => (prev + 1) % sceneCount);
     }, 3000);
     return () => window.clearInterval(timer);
   }, [isPlayingDemoReel, storyboardResult]);
 
   const handleTestProvider = async (id: AIProviderId) => {
+    if (!isMountedRef.current) return;
     setTestingProviderId(id);
     try {
       const res = await fetch(`/api/ai/providers/${id}/test`, {
         method: 'POST',
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ ok: false, message: 'Invalid response' }));
+      if (!isMountedRef.current) return;
       setTestMessages((prev) => ({
         ...prev,
-        [id]: data.message || (data.ok ? 'Connection verified' : 'Failed'),
+        [id]: data?.message || (data?.ok ? 'Connection verified' : 'Failed'),
       }));
       await fetchProviders();
     } catch (err: any) {
+      if (!isMountedRef.current) return;
       setTestMessages((prev) => ({
         ...prev,
         [id]: err?.message || 'Network error testing provider',
       }));
     } finally {
-      setTestingProviderId(null);
+      if (isMountedRef.current) {
+        setTestingProviderId(null);
+      }
     }
   };
 
   const buildSanitizedMemories = (subset?: MemoryItem[]) => {
-    const list = subset || memories;
+    const list = Array.isArray(subset) ? subset : (Array.isArray(memories) ? memories : []);
     return list.map((m) => {
-      const roomObj = rooms.find((r) => r.id === m.roomId);
+      const roomObj = rooms?.find((r) => r.id === m.roomId);
       return {
         id: m.id,
         ownerId: m.ownerId || userId,
@@ -221,6 +246,11 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
     overrideProvider?: AIProviderId,
     forceDemo?: boolean,
   ): Promise<AITaskResponse<T> | null> => {
+    if (!isMountedRef.current) return null;
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsRunningTask(true);
     setTaskError(null);
     try {
@@ -235,13 +265,15 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fullReq),
+        signal: controller.signal,
       });
-      const data: AITaskResponse<T> = await res.json();
-      if (!data.ok) {
+      const data: AITaskResponse<T> | null = await res.json().catch(() => null);
+      if (!isMountedRef.current) return null;
+      if (!data || !data.ok) {
         setTaskError({
-          message: data.error?.message || 'AI task failed to complete.',
-          alternatives: data.error?.availableAlternativeProviders,
-          canUseDemo: data.error?.canUseDemoFallback,
+          message: data?.error?.message || 'AI task failed to complete.',
+          alternatives: data?.error?.availableAlternativeProviders,
+          canUseDemo: data?.error?.canUseDemoFallback ?? true,
         });
         return null;
       }
@@ -251,16 +283,19 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
           : `${data.providerUsed} (${data.modelUsed})`,
       );
       setLastLatencyMs(data.latencyMs);
-      fetchProviders();
+      void fetchProviders();
       return data;
     } catch (err: any) {
+      if (err?.name === 'AbortError' || !isMountedRef.current) return null;
       setTaskError({
         message: err?.message || 'Network error communicating with AI Router.',
         canUseDemo: true,
       });
       return null;
     } finally {
-      setIsRunningTask(false);
+      if (isMountedRef.current) {
+        setIsRunningTask(false);
+      }
     }
   };
 
