@@ -1914,25 +1914,49 @@ export function buildExhibitionRoom3DScene(params: {
   // the original museum architecture and render order completely unchanged.
   let parkSeesawPivot: THREE.Object3D | null = null;
   if (isChildhoodPark) {
+    // Keep all room lights and the South entrance/exit archway in rootGroup so they
+    // are never disabled by roomArchitectureGroup.visible = false.
+    const keepInRootObjects = new Set<THREE.Object3D>([
+      exitArchHitbox,
+      roomHemiLight,
+      centerCeilingLight,
+      northWallWasher,
+      westWallWasher,
+      eastWallWasher,
+      southEntryLight,
+      southPortalColumnsGroup,
+      westTympanumGroup,
+      roomArchSurround,
+      exitPlaqueMesh,
+      entranceThresholdBar,
+    ]);
     const architectureShellChildren = rootGroup.children.slice(architectureShellStartIndex);
     const roomArchitectureGroup = new THREE.Group();
     roomArchitectureGroup.name = `room_architecture_shell_${room.id}`;
+    const hiddenShellObjects = new Set<THREE.Object3D>();
     architectureShellChildren.forEach((child) => {
+      if (keepInRootObjects.has(child) || (child as THREE.Light).isLight) {
+        return;
+      }
       rootGroup.remove(child);
-      if (child !== exitArchHitbox) roomArchitectureGroup.add(child);
-      else rootGroup.add(child);
+      roomArchitectureGroup.add(child);
+      hiddenShellObjects.add(child);
     });
     roomArchitectureGroup.visible = false;
     rootGroup.add(roomArchitectureGroup);
 
     // Hidden gallery walls must not continue blocking the park camera.
-    const hiddenShellObjects = new Set(architectureShellChildren);
     for (let i = solidWallMeshes.length - 1; i >= 0; i--) {
       if (hiddenShellObjects.has(solidWallMeshes[i])) solidWallMeshes.splice(i, 1);
     }
     for (let i = cameraObstacleMeshes.length - 1; i >= 0; i--) {
       if (hiddenShellObjects.has(cameraObstacleMeshes[i])) cameraObstacleMeshes.splice(i, 1);
     }
+
+    // Add warm open-air sunlight for the Childhood Memory Park meadow
+    const parkSunLight = new THREE.DirectionalLight(0xfff4dc, 1.15);
+    parkSunLight.position.set(6.5, 11.5, 4.5);
+    rootGroup.add(parkSunLight);
 
     const builtPark = buildChildhoodParkEnvironment({
       root: rootGroup,
@@ -6072,7 +6096,7 @@ export function buildExhibitionRoom3DScene(params: {
         hopscotchPuckMesh.position.y =
           0.025 + Math.abs(Math.sin(elapsedSec * 8.5)) * 0.14;
       } else {
-        hopscotchPuckMesh.position.set(0, 0.025);
+        hopscotchPuckMesh.position.set(0, 0.025, 0);
       }
     }
 

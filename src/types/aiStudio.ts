@@ -23,6 +23,7 @@ export type AICapability =
 
 export type ConnectionState =
   | 'connected'
+  | 'unverified'
   | 'missing_credentials'
   | 'auth_failed'
   | 'rate_limited'
@@ -46,11 +47,15 @@ export interface AIProviderStatus {
   vendor: string;
   credentialEnvVar: string;
   configured: boolean;
+  verified?: boolean;
   connectionStatus: ConnectionState;
   enabledCapabilities: AICapability[];
   models: {
     textModel: string;
     visionModel?: string;
+    metadataModel?: string;
+    classificationModel?: string;
+    curationModel?: string;
     imageModel?: string;
     videoModel?: string;
   };
@@ -607,6 +612,7 @@ export interface AITaskResponse<T = unknown> {
       | 'UNAUTHORIZED_MEMORY_ACCESS'
       | 'AUTHENTICATION_FAILED'
       | 'RATE_LIMITED'
+      | 'MODEL_UNAVAILABLE'
       | 'PROVIDER_UNAVAILABLE'
       | 'INVALID_AI_RESPONSE'
       | 'INVALID_INPUT'

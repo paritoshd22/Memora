@@ -1414,14 +1414,84 @@ async function runTests() {
     passed++;
   }
 
-  console.log(`\n🎉 All ${passed}/20 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
+  // 21. Task-Specific Gemini Model Routing, Unverified-Until-Success Connection Status, Placeholder Rejection & Image Validation
+  {
+    const {
+      GEMINI_MODELS,
+      resolveGeminiModelForTask,
+      isValidGeminiApiKey,
+      redactSecretsFromMessage,
+      classifyGeminiError,
+      sanitizeBase64ImageInput,
+    } = await import('../geminiConfig');
+    const { GeminiProviderAdapter } = await import('../aiProviders');
+    const { MemoryCurationService } = await import('../memoryCurationService');
+
+    // 21a. Task routing
+    assert.equal(resolveGeminiModelForTask('image_understanding'), GEMINI_MODELS.vision);
+    assert.equal(resolveGeminiModelForTask('metadata_extraction'), GEMINI_MODELS.metadata);
+    assert.equal(resolveGeminiModelForTask('memory_classification'), GEMINI_MODELS.classification);
+    assert.equal(resolveGeminiModelForTask('collection_descriptions'), GEMINI_MODELS.curation);
+    assert.equal(resolveGeminiModelForTask('caption_generation', { hasImageInput: true }), GEMINI_MODELS.vision);
+    assert.equal(resolveGeminiModelForTask('image_generation'), GEMINI_MODELS.image);
+    assert.equal(resolveGeminiModelForTask('video_generation'), GEMINI_MODELS.video);
+
+    // 21b. Placeholder key rejection & secret redaction
+    assert.equal(isValidGeminiApiKey('MY_GEMINI_API_KEY'), false);
+    assert.equal(isValidGeminiApiKey('YOUR_GEMINI_API_KEY_HERE'), false);
+    assert.equal(isValidGeminiApiKey('<GEMINI_API_KEY>'), false);
+    assert.equal(isValidGeminiApiKey('REPLACE_WITH_REAL_KEY_12345'), false);
+    assert.equal(isValidGeminiApiKey('TODO_ADD_API_KEY_123456'), false);
+    assert.equal(isValidGeminiApiKey('AIzaSyRealLookingValidKey9876543210'), true);
+    assert.equal(
+      redactSecretsFromMessage('Failed with key AIzaSyRealLookingValidKey9876543210 in URL'),
+      'Failed with key [REDACTED_KEY] in URL',
+    );
+
+    // 21c. Unverified status when key exists before any request succeeds
+    const adapterWithKey = new GeminiProviderAdapter(() => 'AIzaSyRealLookingValidKey9876543210');
+    assert.equal(adapterWithKey.isConfigured(), true);
+    assert.equal(adapterWithKey.getStatus().connectionStatus, 'unverified');
+    assert.equal(adapterWithKey.getStatus().verified, false);
+    adapterWithKey.recordExternalOutcome('connected', undefined, GEMINI_MODELS.primary);
+    assert.equal(adapterWithKey.getStatus().connectionStatus, 'connected');
+    assert.equal(adapterWithKey.getStatus().verified, true);
+
+    const curationWithKey = new MemoryCurationService({
+      getApiKey: () => 'AIzaSyRealLookingValidKey9876543210',
+    });
+    assert.equal(curationWithKey.getStatus().connectionStatus, 'unverified');
+    assert.equal(curationWithKey.getStatus().verified, false);
+
+    // 21d. MODEL_UNAVAILABLE classification on 404
+    const err404: any = new Error('models/nonexistent-model is not found for API version v1beta');
+    err404.status = 404;
+    const classified404 = classifyGeminiError(err404);
+    assert.equal(classified404.code, 'MODEL_UNAVAILABLE');
+    assert.equal(classified404.connectionStatus, 'provider_unavailable');
+
+    // 21e. Base64 image & MIME validation
+    const validPng = sanitizeBase64ImageInput(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    );
+    assert.equal(validPng.ok, true);
+    assert.equal(validPng.mimeType, 'image/png');
+    assert.ok(validPng.base64Data && !validPng.base64Data.startsWith('data:'));
+
+    const invalidMime = sanitizeBase64ImageInput(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'application/x-msdownload',
+    );
+    assert.equal(invalidMime.ok, false);
+
+    console.log('✅ Test 21 Passed: Task-specific model routing, unverified-until-tested connection status, placeholder rejection, secret redaction, MODEL_UNAVAILABLE classification, and base64 validation.');
+    passed++;
+  }
+
+  console.log(`\n🎉 All ${passed}/21 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
 }
 
 runTests().catch((err) => {
   console.error('Test Suite Failed:', err);
   process.exit(1);
 });
-
-
-
-

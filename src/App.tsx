@@ -1546,19 +1546,41 @@ export default function App() {
 
   const handleEnterRoom = useCallback(
     (roomId: string) => {
-      const targetId = roomId === 'childhood' ? 'childhood' : 'childhood';
+      const targetId = rooms.some((r) => r.id === roomId) ? roomId : 'childhood';
       const targetRoom = rooms.find((r) => r.id === targetId);
       if (!targetRoom) return;
 
+      // Guard against duplicate entry triggers when already inside this room
+      if (activeRoomId === targetId) return;
+
       if (roomEntryActivateTimerRef.current) {
         clearTimeout(roomEntryActivateTimerRef.current);
+        roomEntryActivateTimerRef.current = null;
       }
       if (roomEntryHideTimerRef.current) {
         clearTimeout(roomEntryHideTimerRef.current);
+        roomEntryHideTimerRef.current = null;
       }
 
       if (targetRoom.status !== 'active') {
-        handleActivateChildhoodRoom();
+        try {
+          if (targetId === 'childhood') {
+            localStorage.setItem(scopedKeys.CHILDHOOD_ACTIVATED, 'true');
+          }
+        } catch {
+          // ignore
+        }
+        setRooms((prev) =>
+          prev.map((r) =>
+            r.id === targetId
+              ? {
+                  ...r,
+                  status: 'active',
+                  enabled: true,
+                }
+              : r,
+          ),
+        );
       }
 
       setHasEnteredAtrium(true);
@@ -1567,25 +1589,21 @@ export default function App() {
       setIsMusicPlayerOpen(false);
       setShowControlsGuide(false);
       setShowProfileMenu(false);
+      setShowActivationThankYou(false);
       setActiveNotification(null);
       setNewlyCreatedRoom(null);
 
-      // Keep the atrium visible briefly while the doorway/portal transition plays.
-      // The park scene mounts underneath the transition after the short door-flash beat.
+      // Set activeRoomId immediately so AtriumScene3D mounts the 3D room on the very first frame
+      // and never re-triggers doorway detection in a 60fps loop.
+      setActiveRoomId(targetId);
       setRoomEntryTransition(true);
-      setActiveRoomId(null);
-
-      roomEntryActivateTimerRef.current = setTimeout(() => {
-        setActiveRoomId('childhood');
-        roomEntryActivateTimerRef.current = null;
-      }, 520);
 
       roomEntryHideTimerRef.current = setTimeout(() => {
         setRoomEntryTransition(false);
         roomEntryHideTimerRef.current = null;
-      }, 2050);
+      }, 1250);
     },
-    [rooms, handleActivateChildhoodRoom],
+    [rooms, activeRoomId, scopedKeys.CHILDHOOD_ACTIVATED],
   );
 
   const handleBackToAtrium = useCallback(() => {

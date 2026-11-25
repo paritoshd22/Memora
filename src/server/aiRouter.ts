@@ -324,13 +324,17 @@ export class AIRouter {
           ? 'MALFORMED_AI_OUTPUT'
           : rawCode === 'INVALID_AI_RESPONSE'
             ? 'INVALID_AI_RESPONSE'
-            : rawCode === 'AUTHENTICATION_FAILED'
-              ? 'AUTHENTICATION_FAILED'
-              : rawCode === 'RATE_LIMITED'
-                ? 'RATE_LIMITED'
-                : rawCode === 'PROVIDER_UNAVAILABLE'
-                  ? 'PROVIDER_UNAVAILABLE'
-                  : 'PROVIDER_ERROR';
+            : rawCode === 'INVALID_INPUT'
+              ? 'INVALID_INPUT'
+              : rawCode === 'AUTHENTICATION_FAILED'
+                ? 'AUTHENTICATION_FAILED'
+                : rawCode === 'RATE_LIMITED'
+                  ? 'RATE_LIMITED'
+                  : rawCode === 'MODEL_UNAVAILABLE'
+                    ? 'MODEL_UNAVAILABLE'
+                    : rawCode === 'PROVIDER_UNAVAILABLE'
+                      ? 'PROVIDER_UNAVAILABLE'
+                      : 'PROVIDER_ERROR';
       return {
         ok: false,
         task: req.task,

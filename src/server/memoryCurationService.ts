@@ -14,9 +14,11 @@ import { INITIAL_ROOMS } from '../data/initialMuseumData';
 import { parseAndValidateJson } from './aiProviders';
 import {
   classifyGeminiError,
-  createGeminiClient,
   GEMINI_MODELS,
+  generateGeminiContentWithResilience,
   isValidGeminiApiKey,
+  redactSecretsFromMessage,
+  sanitizeBase64ImageInput,
 } from './geminiConfig';
 
 export interface GeminiContentPart {
@@ -76,15 +78,25 @@ function extractBase64Payload(
   if (!dataOrUrl || typeof dataOrUrl !== 'string') return null;
   const trimmed = dataOrUrl.trim();
   if (!trimmed) return null;
-  const match = trimmed.match(/^data:([^;]+);base64,(.+)$/);
+  if (fallbackMime.startsWith('image/')) {
+    const sanitized = sanitizeBase64ImageInput(trimmed, fallbackMime);
+    if (sanitized.ok && sanitized.base64Data && sanitized.mimeType) {
+      return {
+        mimeType: sanitized.mimeType,
+        data: sanitized.base64Data,
+      };
+    }
+    return null;
+  }
+  const match = trimmed.match(/^data:([^;]+);base64,([\s\S]+)$/);
   if (match) {
     return {
       mimeType: match[1].trim() || fallbackMime,
-      data: match[2].trim(),
+      data: match[2].replace(/\s+/g, ''),
     };
   }
   // Plain base64 string (no data: prefix)
-  if (/^[A-Za-z0-9+/=\s]+$/.test(trimmed) && trimmed.length >= 16) {
+  if (/^[A-Za-z0-9+/=\s_-]+$/.test(trimmed) && trimmed.length >= 16) {
     return {
       mimeType: fallbackMime,
       data: trimmed.replace(/\s+/g, ''),
@@ -115,15 +127,18 @@ async function defaultGeminiExecutor(params: {
   parts: GeminiContentPart[];
   responseMimeType?: string;
 }): Promise<string> {
-  const ai = createGeminiClient(params.apiKey);
-  const response = await ai.models.generateContent({
-    model: params.model,
+  const res = await generateGeminiContentWithResilience({
+    apiKey: params.apiKey,
+    preferredModel: params.model,
     contents: { parts: params.parts as any },
     config: params.responseMimeType
       ? { responseMimeType: params.responseMimeType }
       : undefined,
+    timeoutMs: 20_000,
+    maxRetriesPerModel: 1,
+    allowModelFallback: true,
   });
-  return (response.text || '').trim();
+  return res.text;
 }
 
 export class MemoryCurationService {
@@ -135,6 +150,7 @@ export class MemoryCurationService {
   ) => void;
   private readonly timeoutMs: number;
   private connectionStatus: ConnectionState = 'missing_credentials';
+  private hasVerifiedConnection = false;
   private lastError?: string;
   private lastCheckedAt?: string;
 
@@ -153,8 +169,9 @@ export class MemoryCurationService {
       this.onStatusUpdate = optionsOrGetKey?.onStatusUpdate;
       this.timeoutMs = optionsOrGetKey?.timeoutMs ?? 30000;
     }
+    // Do not display 'connected' merely because a key exists; require an API request to succeed.
     this.connectionStatus = this.isConfigured()
-      ? 'connected'
+      ? 'unverified'
       : 'missing_credentials';
   }
 
@@ -190,6 +207,7 @@ export class MemoryCurationService {
 
   public getStatus(): {
     configured: boolean;
+    verified: boolean;
     connectionStatus: ConnectionState;
     model: string;
     models: {
@@ -206,12 +224,18 @@ export class MemoryCurationService {
     lastCheckedAt?: string;
   } {
     const configured = this.isConfigured();
+    const effectiveStatus: ConnectionState = !configured
+      ? 'missing_credentials'
+      : this.connectionStatus === 'missing_credentials'
+        ? this.hasVerifiedConnection
+          ? 'connected'
+          : 'unverified'
+        : this.connectionStatus;
     return {
       configured,
-      connectionStatus: configured
-        ? this.connectionStatus
-        : 'missing_credentials',
-      model: GEMINI_MODELS.primary,
+      verified: configured && this.hasVerifiedConnection && effectiveStatus === 'connected',
+      connectionStatus: effectiveStatus,
+      model: GEMINI_MODELS.curation,
       models: {
         primary: GEMINI_MODELS.primary,
         curation: GEMINI_MODELS.curation,
@@ -229,9 +253,17 @@ export class MemoryCurationService {
 
   private setStatus(status: ConnectionState, errorMessage?: string): void {
     this.connectionStatus = status;
+    if (status === 'connected') {
+      this.hasVerifiedConnection = true;
+    }
     this.lastCheckedAt = new Date().toISOString();
-    this.lastError = status === 'connected' ? undefined : errorMessage;
-    this.onStatusUpdate?.(status, errorMessage);
+    this.lastError =
+      status === 'connected'
+        ? undefined
+        : errorMessage
+          ? redactSecretsFromMessage(errorMessage)
+          : undefined;
+    this.onStatusUpdate?.(status, this.lastError);
   }
 
   public async analyzeItem(
@@ -375,20 +407,44 @@ export class MemoryCurationService {
     // Build multimodal parts for live Gemini analysis
     const parts: GeminiContentPart[] = [];
 
-    const imagePayload =
-      mediaCategory === 'image' || mediaCategory === 'certificate' || mediaCategory === 'document'
-        ? extractBase64Payload(
-            item.analysisImageBase64 ||
-              (item.mimeType?.startsWith('image/') ? item.originalDataUrl : undefined),
-            item.analysisImageMimeType || item.mimeType || 'image/jpeg',
-          )
-        : null;
+    const rawCandidateImage =
+      item.analysisImageBase64 ||
+      item.imageBase64 ||
+      item.base64 ||
+      (item.mimeType?.startsWith('image/') ? item.originalDataUrl : undefined);
+    const candidateImageMime =
+      item.analysisImageMimeType || item.imageMimeType || item.mimeType || 'image/jpeg';
 
-    if (imagePayload) {
+    if (
+      (mediaCategory === 'image' ||
+        mediaCategory === 'certificate' ||
+        mediaCategory === 'document') &&
+      typeof rawCandidateImage === 'string' &&
+      rawCandidateImage.trim().length > 0
+    ) {
+      const sanitizedImg = sanitizeBase64ImageInput(
+        rawCandidateImage,
+        candidateImageMime,
+      );
+      if (!sanitizedImg.ok || !sanitizedImg.base64Data || !sanitizedImg.mimeType) {
+        return {
+          ok: false,
+          analyzedBy: 'none',
+          isDemo: false,
+          warnings: [sanitizedImg.errorMessage || 'Invalid image payload.'],
+          connectionStatus: this.getStatus().connectionStatus,
+          code: 'INVALID_INPUT',
+          httpStatus: 400,
+          retryable: false,
+          message:
+            sanitizedImg.errorMessage ||
+            'The uploaded image payload or MIME type could not be validated for Gemini analysis.',
+        };
+      }
       parts.push({
         inlineData: {
-          mimeType: imagePayload.mimeType,
-          data: imagePayload.data,
+          mimeType: sanitizedImg.mimeType,
+          data: sanitizedImg.base64Data,
         },
       });
     }
@@ -474,10 +530,15 @@ export class MemoryCurationService {
 
     parts.push({ text: systemGroundedPrompt });
 
+    const hasInlineVisual = parts.some((p) => Boolean(p.inlineData));
+    const targetCurationModel = hasInlineVisual
+      ? GEMINI_MODELS.vision
+      : GEMINI_MODELS.curation;
+
     try {
       const rawResponseText = await this.runModelWithTimeout({
         apiKey,
-        model: GEMINI_MODELS.primary,
+        model: targetCurationModel,
         parts,
         responseMimeType: 'application/json',
       });
@@ -551,7 +612,7 @@ export class MemoryCurationService {
 
       const report: MemoryAnalysisReport = {
         analyzedBy: 'gemini',
-        modelUsed: GEMINI_MODELS.primary,
+        modelUsed: targetCurationModel,
         analyzedAt: new Date().toISOString(),
         mediaCategory,
         mainSubject: String(parsed.mainSubject || cleanTitle).trim().slice(0, 140),
@@ -595,7 +656,7 @@ export class MemoryCurationService {
       return {
         ok: true,
         analyzedBy: 'gemini',
-        modelUsed: GEMINI_MODELS.primary,
+        modelUsed: targetCurationModel,
         isDemo: false,
         confidenceScore,
         warnings,
@@ -682,7 +743,7 @@ export class MemoryCurationService {
 
         const raw = await this.executeModel({
           apiKey,
-          model: GEMINI_MODELS.primary,
+          model: GEMINI_MODELS.curation,
           parts: [{ text: prompt }],
           responseMimeType: 'application/json',
         });
@@ -692,7 +753,7 @@ export class MemoryCurationService {
           if (Array.isArray(parsed.collections)) {
             proposedCollections = parsed.collections;
             analyzedBy = 'gemini';
-            modelUsed = GEMINI_MODELS.primary;
+            modelUsed = GEMINI_MODELS.curation;
             this.setStatus('connected');
           }
         }

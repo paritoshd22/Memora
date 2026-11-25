@@ -8,9 +8,12 @@ import {
 } from '../types/aiStudio';
 import {
   classifyGeminiError,
-  createGeminiClient,
   GEMINI_MODELS,
+  generateGeminiContentWithResilience,
   isValidGeminiApiKey,
+  redactSecretsFromMessage,
+  resolveGeminiModelForTask,
+  sanitizeBase64ImageInput,
 } from './geminiConfig';
 
 export interface AIProviderExecutionResult {
@@ -85,7 +88,9 @@ export function parseAndValidateJson<T = Record<string, unknown>>(
 
   for (const key of requiredKeys) {
     if (!(key in parsed) || parsed[key] === undefined) {
-      const err: any = new Error(`AI response JSON is missing required key "${key}".`);
+      const err: any = new Error(
+        `AI response JSON is missing required key "${key}".`,
+      );
       err.code = 'MALFORMED_AI_OUTPUT';
       throw err;
     }
@@ -140,6 +145,15 @@ function buildStructuredPrompt(req: AITaskRequest): string {
       .join('\n');
   }
 
+  if (req.task === 'story_writing' && req.prompt?.startsWith('__STORYBOARD__:')) {
+    return [
+      'Create a grounded memory film storyboard JSON from the provided memories.',
+      `Context: ${req.prompt}`,
+      memSummary ? `Verified memories:\n${memSummary}` : 'No memories provided.',
+      'Return ONLY valid JSON with keys: filmTitle, theme, aspectRatio, totalDurationSeconds, musicalMood, scenes (array of {sceneNumber, memoryId, memoryTitle, durationSeconds, cameraMotion, caption, visualPrompt}).',
+    ].join('\n');
+  }
+
   if (
     req.task === 'metadata_extraction' ||
     req.task === 'image_understanding' ||
@@ -147,7 +161,7 @@ function buildStructuredPrompt(req: AITaskRequest): string {
     req.task === 'memory_classification'
   ) {
     return [
-      `Extract grounded metadata JSON for this user memory input: ${req.prompt || 'Uploaded memory'}`,
+      `Task: ${req.task}. Extract grounded metadata JSON for this user memory input: ${req.prompt || 'Uploaded memory'}`,
       'Never invent dates, identities, locations, relationships, or events not explicitly visible or provided in the input.',
       'Return ONLY valid JSON with keys: suggestedRoomId, suggestedRoomName, suggestedTitle, suggestedLocation, suggestedCategory, suggestedCaption, suggestedStory, suggestedTags, suggestedMotif, confidenceNote.',
     ].join('\n');
@@ -170,6 +184,8 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
 
   private readonly getApiKey: () => string | undefined;
   private connectionStatus: ConnectionState = 'missing_credentials';
+  private hasVerifiedConnection = false;
+  private lastVerifiedModel: string = GEMINI_MODELS.primary;
   private usage: ProviderUsageMetrics = {
     totalRequests: 0,
     successfulRequests: 0,
@@ -180,8 +196,10 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
 
   constructor(getApiKey?: () => string | undefined) {
     this.getApiKey = getApiKey ?? (() => process.env.GEMINI_API_KEY);
+    // Do not claim 'connected' merely because a key string exists in process.env.
+    // 'connected' is set only after a real API call succeeds.
     this.connectionStatus = this.isConfigured()
-      ? 'connected'
+      ? 'unverified'
       : 'missing_credentials';
   }
 
@@ -192,35 +210,53 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
   public recordExternalOutcome(
     status: ConnectionState,
     errorMessage?: string,
+    verifiedModel?: string,
   ): void {
     this.connectionStatus = status;
     this.usage.lastUsedAt = new Date().toISOString();
     if (status === 'connected') {
+      this.hasVerifiedConnection = true;
+      if (verifiedModel) {
+        this.lastVerifiedModel = verifiedModel;
+      }
       this.usage.lastError = undefined;
     } else if (errorMessage) {
-      this.usage.lastError = errorMessage;
+      this.usage.lastError = redactSecretsFromMessage(errorMessage);
     }
   }
 
   public getStatus(): AIProviderStatus {
     const configured = this.isConfigured();
+    let effectiveStatus: ConnectionState;
+    if (!configured) {
+      effectiveStatus = 'missing_credentials';
+    } else if (this.connectionStatus === 'missing_credentials') {
+      effectiveStatus = this.hasVerifiedConnection ? 'connected' : 'unverified';
+    } else {
+      effectiveStatus = this.connectionStatus;
+    }
+
     return {
       id: this.id,
       displayName: this.displayName,
       vendor: this.vendor,
       credentialEnvVar: this.credentialEnvVar,
       configured,
-      connectionStatus: configured ? this.connectionStatus : 'missing_credentials',
+      verified: configured && this.hasVerifiedConnection && effectiveStatus === 'connected',
+      connectionStatus: effectiveStatus,
       enabledCapabilities: this.supportedCapabilities,
       models: {
         textModel: GEMINI_MODELS.primary,
         visionModel: GEMINI_MODELS.vision,
+        metadataModel: GEMINI_MODELS.metadata,
+        classificationModel: GEMINI_MODELS.classification,
+        curationModel: GEMINI_MODELS.curation,
         imageModel: GEMINI_MODELS.image,
         videoModel: GEMINI_MODELS.video,
       },
       costEstimateNote: 'Pay-as-you-go via server GEMINI_API_KEY.',
       setupInstructions:
-        'Configure GEMINI_API_KEY in server environment secrets to enable live Gemini curation, vision, and media analysis.',
+        'Configure GEMINI_API_KEY in server environment secrets (Settings > Secrets) to enable live Gemini curation, vision, and media analysis.',
       usage: { ...this.usage },
     };
   }
@@ -230,46 +266,52 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
     const apiKey = this.getApiKey();
     if (!isValidApiKey(apiKey)) {
       this.connectionStatus = 'missing_credentials';
+      this.hasVerifiedConnection = false;
       return {
         ok: false,
         latencyMs: Date.now() - started,
         model: GEMINI_MODELS.primary,
         connectionStatus: 'missing_credentials',
         errorCode: 'MISSING_CREDENTIALS',
-        message: 'GEMINI_API_KEY is not configured on the server.',
+        message:
+          'GEMINI_API_KEY is not configured on the server. Add a valid key in Settings > Secrets.',
       };
     }
 
+    this.usage.totalRequests++;
+    this.usage.lastUsedAt = new Date().toISOString();
+
     try {
-      const ai = createGeminiClient(apiKey);
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.primary,
-        contents: 'Reply with OK.',
+      const result = await generateGeminiContentWithResilience({
+        apiKey,
+        preferredModel: GEMINI_MODELS.primary,
+        contents: 'Reply with the single word OK.',
+        timeoutMs: 14_000,
+        maxRetriesPerModel: 1,
+        allowModelFallback: true,
       });
-      const text = (response.text || '').trim();
-      if (!text) {
-        this.connectionStatus = 'invalid_response';
-        this.usage.lastError = 'Gemini returned an empty response during connection check.';
-        return {
-          ok: false,
-          latencyMs: Date.now() - started,
-          model: GEMINI_MODELS.primary,
-          connectionStatus: 'invalid_response',
-          errorCode: 'INVALID_AI_RESPONSE',
-          message: 'Gemini returned an empty response during connection check.',
-        };
-      }
+
+      this.usage.successfulRequests++;
+      this.hasVerifiedConnection = true;
+      this.lastVerifiedModel = result.modelUsed;
       this.connectionStatus = 'connected';
       this.usage.lastError = undefined;
+
+      const fallbackNote =
+        result.modelUsed !== GEMINI_MODELS.primary
+          ? ` (verified via fallback model ${result.modelUsed} while ${GEMINI_MODELS.primary} experienced high demand)`
+          : ` (${result.modelUsed})`;
+
       return {
         ok: true,
         latencyMs: Date.now() - started,
-        model: GEMINI_MODELS.primary,
+        model: result.modelUsed,
         connectionStatus: 'connected',
-        message: `Google Gemini connection verified (${GEMINI_MODELS.primary}).`,
+        message: `Google Gemini connection verified${fallbackNote}.`,
       };
     } catch (err: unknown) {
       const classified = classifyGeminiError(err);
+      this.usage.failedRequests++;
       this.connectionStatus = classified.connectionStatus;
       this.usage.lastError = classified.message;
       return {
@@ -283,7 +325,9 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
     }
   }
 
-  public async executeTask(req: AITaskRequest): Promise<AIProviderExecutionResult> {
+  public async executeTask(
+    req: AITaskRequest,
+  ): Promise<AIProviderExecutionResult> {
     const apiKey = this.getApiKey();
     if (!isValidApiKey(apiKey)) {
       this.connectionStatus = 'missing_credentials';
@@ -295,51 +339,81 @@ export class GeminiProviderAdapter implements AIProviderAdapter {
     this.usage.totalRequests++;
     this.usage.lastUsedAt = new Date().toISOString();
 
+    const hasImageInput = Boolean(req.imageBase64 && req.imageBase64.trim());
+    const targetModel = resolveGeminiModelForTask(req.task, { hasImageInput });
+
     try {
-      const ai = createGeminiClient(apiKey);
       const prompt = buildStructuredPrompt(req);
       const parts: any[] = [{ text: prompt }];
-      if (req.imageBase64 && req.imageMimeType) {
+
+      if (hasImageInput) {
+        const sanitizedImg = sanitizeBase64ImageInput(
+          req.imageBase64,
+          req.imageMimeType,
+        );
+        if (!sanitizedImg.ok || !sanitizedImg.base64Data || !sanitizedImg.mimeType) {
+          const inputErr: any = new Error(
+            sanitizedImg.errorMessage || 'Invalid image payload for Gemini vision task.',
+          );
+          inputErr.code = 'INVALID_INPUT';
+          throw inputErr;
+        }
         parts.push({
           inlineData: {
-            mimeType: req.imageMimeType,
-            data: req.imageBase64.replace(/^data:[^;]+;base64,/, ''),
+            mimeType: sanitizedImg.mimeType,
+            data: sanitizedImg.base64Data,
           },
         });
       }
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODELS.primary,
+      const result = await generateGeminiContentWithResilience({
+        apiKey,
+        preferredModel: targetModel,
         contents: { parts },
         config: {
           responseMimeType: 'application/json',
         },
+        timeoutMs: 20_000,
+        maxRetriesPerModel: 1,
+        allowModelFallback: true,
       });
-      const text = (response.text || '').trim();
-      if (!text) {
-        const emptyErr: any = new Error('Gemini returned an empty response.');
-        emptyErr.code = 'INVALID_AI_RESPONSE';
-        throw emptyErr;
-      }
+
+      const isStoryboard =
+        req.task === 'story_writing' &&
+        Boolean(req.prompt?.startsWith('__STORYBOARD__:'));
       const requiredKeys =
         req.task === 'room_design'
           ? ['themeName']
-          : req.task === 'memory_search' || req.task === 'story_writing'
-            ? ['answerMarkdown']
-            : [];
-      const data = parseAndValidateJson(text, requiredKeys);
+          : isStoryboard
+            ? ['filmTitle', 'scenes']
+            : req.task === 'memory_search' || req.task === 'story_writing'
+              ? ['answerMarkdown']
+              : [];
+      const data = parseAndValidateJson(result.text, requiredKeys);
+
       this.usage.successfulRequests++;
+      this.hasVerifiedConnection = true;
+      this.lastVerifiedModel = result.modelUsed;
       this.connectionStatus = 'connected';
       this.usage.lastError = undefined;
 
+      const inputTokens = Math.ceil(prompt.length / 4) + (hasImageInput ? 258 : 0);
+      const outputTokens = Math.ceil(result.text.length / 4);
+      this.usage.estimatedInputTokens += inputTokens;
+      this.usage.estimatedOutputTokens += outputTokens;
+
       return {
         data,
-        modelUsed: GEMINI_MODELS.primary,
-        inputTokens: Math.ceil(prompt.length / 4),
-        outputTokens: Math.ceil(text.length / 4),
+        modelUsed: result.modelUsed,
+        inputTokens,
+        outputTokens,
         estimatedCostUsd: 0.0002,
       };
     } catch (err: unknown) {
+      if ((err as any)?.code === 'INVALID_INPUT') {
+        this.usage.failedRequests++;
+        throw err;
+      }
       const classified = classifyGeminiError(err);
       this.usage.failedRequests++;
       this.connectionStatus = classified.connectionStatus;
@@ -364,6 +438,7 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
 
   private readonly getApiKey: () => string | undefined;
   private connectionStatus: ConnectionState = 'missing_credentials';
+  private hasVerifiedConnection = false;
   private usage: ProviderUsageMetrics = {
     totalRequests: 0,
     successfulRequests: 0,
@@ -375,7 +450,7 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
   constructor(getApiKey?: () => string | undefined) {
     this.getApiKey = getApiKey ?? (() => process.env.OPENAI_API_KEY);
     this.connectionStatus = this.isConfigured()
-      ? 'connected'
+      ? 'unverified'
       : 'missing_credentials';
   }
 
@@ -385,13 +460,23 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
 
   public getStatus(): AIProviderStatus {
     const configured = this.isConfigured();
+    let effectiveStatus: ConnectionState;
+    if (!configured) {
+      effectiveStatus = 'missing_credentials';
+    } else if (this.connectionStatus === 'missing_credentials') {
+      effectiveStatus = this.hasVerifiedConnection ? 'connected' : 'unverified';
+    } else {
+      effectiveStatus = this.connectionStatus;
+    }
+
     return {
       id: this.id,
       displayName: this.displayName,
       vendor: this.vendor,
       credentialEnvVar: this.credentialEnvVar,
       configured,
-      connectionStatus: configured ? this.connectionStatus : 'missing_credentials',
+      verified: configured && this.hasVerifiedConnection && effectiveStatus === 'connected',
+      connectionStatus: effectiveStatus,
       enabledCapabilities: this.supportedCapabilities,
       models: {
         textModel: 'gpt-4o-mini',
@@ -410,10 +495,13 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
     const apiKey = this.getApiKey();
     if (!isValidApiKey(apiKey)) {
       this.connectionStatus = 'missing_credentials';
+      this.hasVerifiedConnection = false;
       return {
         ok: false,
         latencyMs: Date.now() - started,
         model: 'gpt-4o-mini',
+        connectionStatus: 'missing_credentials',
+        errorCode: 'MISSING_CREDENTIALS',
         message: 'OPENAI_API_KEY is not configured on the server.',
       };
     }
@@ -423,19 +511,22 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
         headers: { Authorization: `Bearer ${apiKey.trim()}` },
       });
       if (!res.ok) {
-        this.connectionStatus = 'error';
+        this.connectionStatus = res.status === 401 || res.status === 403 ? 'auth_failed' : 'error';
         return {
           ok: false,
           latencyMs: Date.now() - started,
           model: 'gpt-4o-mini',
+          connectionStatus: this.connectionStatus,
           message: `OpenAI API returned HTTP ${res.status}.`,
         };
       }
+      this.hasVerifiedConnection = true;
       this.connectionStatus = 'connected';
       return {
         ok: true,
         latencyMs: Date.now() - started,
         model: 'gpt-4o-mini',
+        connectionStatus: 'connected',
         message: 'OpenAI connection verified.',
       };
     } catch (err: any) {
@@ -444,12 +535,15 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
         ok: false,
         latencyMs: Date.now() - started,
         model: 'gpt-4o-mini',
-        message: `OpenAI connection check failed: ${String(err?.message || err)}`,
+        connectionStatus: 'error',
+        message: `OpenAI connection check failed: ${redactSecretsFromMessage(String(err?.message || err))}`,
       };
     }
   }
 
-  public async executeTask(req: AITaskRequest): Promise<AIProviderExecutionResult> {
+  public async executeTask(
+    req: AITaskRequest,
+  ): Promise<AIProviderExecutionResult> {
     const apiKey = this.getApiKey();
     if (!isValidApiKey(apiKey)) {
       const err: any = new Error('OPENAI_API_KEY is not configured.');
@@ -481,17 +575,19 @@ export class OpenAIProviderAdapter implements AIProviderAdapter {
       const content = json?.choices?.[0]?.message?.content || '{}';
       const data = parseAndValidateJson(content);
       this.usage.successfulRequests++;
+      this.hasVerifiedConnection = true;
       this.connectionStatus = 'connected';
       return {
         data,
         modelUsed: 'gpt-4o-mini',
         inputTokens: json?.usage?.prompt_tokens || Math.ceil(prompt.length / 4),
-        outputTokens: json?.usage?.completion_tokens || Math.ceil(content.length / 4),
+        outputTokens:
+          json?.usage?.completion_tokens || Math.ceil(content.length / 4),
         estimatedCostUsd: 0.0003,
       };
     } catch (err: any) {
       this.usage.failedRequests++;
-      this.usage.lastError = String(err?.message || err);
+      this.usage.lastError = redactSecretsFromMessage(String(err?.message || err));
       throw err;
     }
   }

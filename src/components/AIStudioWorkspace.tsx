@@ -1461,8 +1461,12 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
                   { label: string; className: string }
                 > = {
                   connected: {
-                    label: 'Connected',
+                    label: 'Connected (Verified)',
                     className: 'bg-emerald-100 text-emerald-900',
+                  },
+                  unverified: {
+                    label: 'Key Configured · Test Required',
+                    className: 'bg-amber-100 text-amber-900',
                   },
                   missing_credentials: {
                     label: 'Missing Key',
@@ -1521,8 +1525,19 @@ export const AIStudioWorkspace: React.FC<AIStudioWorkspaceProps> = ({
                           </code>
                         </div>
                         <div>
-                          <strong>Text Model:</strong> {prov.models.textModel}
+                          <strong>Primary / Curation Model:</strong> {prov.models.textModel}
                         </div>
+                        {prov.models.visionModel && (
+                          <div>
+                            <strong>Vision Model:</strong> {prov.models.visionModel}
+                          </div>
+                        )}
+                        {prov.models.metadataModel && (
+                          <div>
+                            <strong>Metadata / Classification Model:</strong>{' '}
+                            {prov.models.metadataModel}
+                          </div>
+                        )}
                         {prov.models.imageModel && (
                           <div>
                             <strong>Image Model:</strong>{' '}

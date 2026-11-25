@@ -1833,6 +1833,8 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       onSelectMemoryRef.current(target.memory);
     } else if (target.kind === 'room_exit') {
       onSelectRoomRef.current(null);
+    } else if (target.kind === 'active_room' && target.room) {
+      onSelectRoomRef.current(target.room.id);
     } else if (
       target.kind === 'empty_slot' &&
       target.room &&
@@ -7115,13 +7117,17 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             return;
           }
 
-          // Note: Active rooms are NEVER entered via cursor click — only empty slots can open the Create Room modal on click.
           if (hitData.kind === 'room_portal') {
             const { roomId, floorId, slotIndex, status } = hitData;
             const room = roomsRef.current.find((r) => r.id === roomId);
             if (status === 'empty' && room) {
               releaseScenePointerLock();
               onOpenCreateRoomInSlotRef.current(floorId, slotIndex, room);
+              return;
+            }
+            if (status === 'active' && room && hits[0].distance < 9.5) {
+              releaseScenePointerLock();
+              onSelectRoomRef.current(room.id);
               return;
             }
           }
