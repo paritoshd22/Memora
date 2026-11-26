@@ -128,7 +128,6 @@ import {
   resolveRoomInteriorMovement,
 } from '../utils/roomExhibition3D';
 import { VideoMemoryPlayer } from './VideoMemoryPlayer';
-import { AtriumFallbackView } from './AtriumFallbackView';
 import {
   AtmospherePresetId,
   ChildhoodThemeStyleId,
@@ -605,7 +604,6 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   );
 
   const [webglError, setWebglError] = useState<string | null>(null);
-  const [recoveryNoticeDismissed, setRecoveryNoticeDismissed] = useState(false);
   const [webglContextLost, setWebglContextLost] = useState<boolean>(false);
   const [sceneRetryNonce, setSceneRetryNonce] = useState<number>(0);
 
@@ -9437,24 +9435,8 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         aria-label="Interactive Multi-Floor 3D Personal Museum"
       />
 
-      {((webglError && !webglContextLost) || activeRoomObj?.id === 'childhood') && (
-        <AtriumFallbackView
-          museumName={resolveMuseumDisplayName(museumSettings.projectName)}
-          currentFloor={currentFloorObj}
-          rooms={rooms}
-          memories={memories}
-          activeRoom={activeRoomObj}
-          onSelectRoom={onSelectRoom}
-          onSelectMemory={onSelectMemory}
-          onOpenAddMemory={onOpenAddMemory}
-          onOpenStation={(station) =>
-            setActiveContextualStation((prev) => (prev === station ? null : station))
-          }
-        />
-      )}
-
       {/* Non-Blocking Compact WebGL Context Recovery Toast (bottom-left) */}
-      {(webglError || webglContextLost) && !recoveryNoticeDismissed && (
+      {(webglError || webglContextLost) && (
         <div
           role="alert"
           data-ui-interactive="true"
@@ -9491,7 +9473,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             </div>
             <button
               type="button"
-              onClick={() => setRecoveryNoticeDismissed(true)}
+              onClick={() => {
+                setWebglError(null);
+                setWebglContextLost(false);
+              }}
               aria-label="Dismiss notice"
               className="p-1 rounded-lg text-[#E8DED0]/70 hover:text-[#FFFCF6] hover:bg-white/10 cursor-pointer shrink-0"
             >
@@ -9512,7 +9497,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               Restore 3D View
             </button>
-            {!webglError && rooms
+            {rooms
               .filter((r) => r.status === 'active')
               .slice(0, 2)
               .map((r) => (
@@ -10421,7 +10406,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             {/* Quick Contextual Park Experiences Bar (compact top-left inside Childhood Room/Park) */}
             <div
               data-ui-interactive="true"
-              className="fixed top-[4.5rem] sm:top-3.5 left-3.5 right-3.5 sm:right-auto sm:left-5 z-20 flex flex-wrap items-center gap-1 pointer-events-auto"
+              className="fixed top-3.5 left-3.5 sm:left-5 z-20 flex flex-wrap items-center gap-1 pointer-events-auto"
             >
               <button
                 type="button"
