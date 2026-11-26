@@ -605,6 +605,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   );
 
   const [webglError, setWebglError] = useState<string | null>(null);
+  const [recoveryNoticeDismissed, setRecoveryNoticeDismissed] = useState(false);
   const [webglContextLost, setWebglContextLost] = useState<boolean>(false);
   const [sceneRetryNonce, setSceneRetryNonce] = useState<number>(0);
 
@@ -9446,11 +9447,14 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           onSelectRoom={onSelectRoom}
           onSelectMemory={onSelectMemory}
           onOpenAddMemory={onOpenAddMemory}
+          onOpenStation={(station) =>
+            setActiveContextualStation((prev) => (prev === station ? null : station))
+          }
         />
       )}
 
       {/* Non-Blocking Compact WebGL Context Recovery Toast (bottom-left) */}
-      {(webglError || webglContextLost) && (
+      {(webglError || webglContextLost) && !recoveryNoticeDismissed && (
         <div
           role="alert"
           data-ui-interactive="true"
@@ -9487,10 +9491,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             </div>
             <button
               type="button"
-              onClick={() => {
-                setWebglError(null);
-                setWebglContextLost(false);
-              }}
+              onClick={() => setRecoveryNoticeDismissed(true)}
               aria-label="Dismiss notice"
               className="p-1 rounded-lg text-[#E8DED0]/70 hover:text-[#FFFCF6] hover:bg-white/10 cursor-pointer shrink-0"
             >

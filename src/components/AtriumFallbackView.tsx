@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowRight, ImageIcon, Lock, Plus } from 'lucide-react';
 import type { Floor, Memory, Room } from '../types/museum';
+import { ChildhoodRoomFallback, type ChildhoodStation } from './ChildhoodRoomFallback';
 
 interface AtriumFallbackViewProps {
   museumName: string;
@@ -11,6 +12,7 @@ interface AtriumFallbackViewProps {
   onSelectRoom: (roomId: string | null) => void;
   onSelectMemory: (memory: Memory) => void;
   onOpenAddMemory?: (roomId: string) => void;
+  onOpenStation?: (station: ChildhoodStation) => void;
 }
 
 function Backdrop() {
@@ -192,7 +194,15 @@ export function AtriumFallbackView(props: AtriumFallbackViewProps) {
       <Backdrop />
       <div className="relative h-full overflow-y-auto px-4 pt-36 sm:pt-24 pb-56 sm:pb-40 flex justify-center">
         <div className="w-full flex justify-center my-auto">
-          {activeRoom ? (
+          {activeRoom?.id === 'childhood' ? (
+            <ChildhoodRoomFallback
+              room={activeRoom}
+              memories={props.memories}
+              onSelectMemory={props.onSelectMemory}
+              onOpenAddMemory={props.onOpenAddMemory}
+              onOpenStation={props.onOpenStation}
+            />
+          ) : activeRoom ? (
             <RoomFallback
               room={activeRoom}
               memories={props.memories}
