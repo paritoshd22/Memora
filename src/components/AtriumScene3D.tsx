@@ -9437,7 +9437,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         aria-label="Interactive Multi-Floor 3D Personal Museum"
       />
 
-      {webglError && !webglContextLost && (
+      {((webglError && !webglContextLost) || activeRoomObj?.id === 'childhood') && (
         <AtriumFallbackView
           museumName={resolveMuseumDisplayName(museumSettings.projectName)}
           currentFloor={currentFloorObj}
