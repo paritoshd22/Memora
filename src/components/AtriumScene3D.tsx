@@ -128,6 +128,7 @@ import {
   resolveRoomInteriorMovement,
 } from '../utils/roomExhibition3D';
 import { VideoMemoryPlayer } from './VideoMemoryPlayer';
+import { AtriumFallbackView } from './AtriumFallbackView';
 import {
   AtmospherePresetId,
   ChildhoodThemeStyleId,
@@ -9435,6 +9436,19 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         aria-label="Interactive Multi-Floor 3D Personal Museum"
       />
 
+      {webglError && !webglContextLost && (
+        <AtriumFallbackView
+          museumName={resolveMuseumDisplayName(museumSettings.projectName)}
+          currentFloor={currentFloorObj}
+          rooms={rooms}
+          memories={memories}
+          activeRoom={activeRoomObj}
+          onSelectRoom={onSelectRoom}
+          onSelectMemory={onSelectMemory}
+          onOpenAddMemory={onOpenAddMemory}
+        />
+      )}
+
       {/* Non-Blocking Compact WebGL Context Recovery Toast (bottom-left) */}
       {(webglError || webglContextLost) && (
         <div
@@ -9497,7 +9511,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               Restore 3D View
             </button>
-            {rooms
+            {!webglError && rooms
               .filter((r) => r.status === 'active')
               .slice(0, 2)
               .map((r) => (
@@ -10406,7 +10420,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             {/* Quick Contextual Park Experiences Bar (compact top-left inside Childhood Room/Park) */}
             <div
               data-ui-interactive="true"
-              className="fixed top-3.5 left-3.5 sm:left-5 z-20 flex flex-wrap items-center gap-1 pointer-events-auto"
+              className="fixed top-[4.5rem] sm:top-3.5 left-3.5 right-3.5 sm:right-auto sm:left-5 z-20 flex flex-wrap items-center gap-1 pointer-events-auto"
             >
               <button
                 type="button"
