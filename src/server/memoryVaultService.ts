@@ -120,18 +120,27 @@ const ALLOWED_PERSISTED_MEDIA_MIMES: Record<string, string> = {
   'image/jpg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
-  'image/gif': 'gif',
   'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
   'video/webm': 'webm',
   'audio/mpeg': 'mp3',
   'audio/mp3': 'mp3',
   'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/wave': 'wav',
+  'audio/mp4': 'm4a',
+  'audio/m4a': 'm4a',
+  'audio/x-m4a': 'm4a',
   'audio/ogg': 'ogg',
-  'application/pdf': 'pdf',
-  'text/plain': 'txt',
 };
 
-const MAX_PERSISTED_MEDIA_BYTES = 15 * 1024 * 1024; // 15 MB
+const DISALLOWED_VAULT_FILE_EXT_RE =
+  /\.(pdf|txt|md|json|csv|log|doc|docx|rtf|xls|xlsx|ppt|pptx|html|htm|xml|eml|msg|chat|zip|rar|7z|tar|gz|exe|dll|bat|sh|dmg|iso|apk|msi)$/i;
+
+const SUPPORTED_VAULT_FORMATS_ERROR =
+  'Only photos (JPG, JPEG, PNG, WEBP), videos (MP4, MOV, WEBM), and music/audio (MP3, WAV, M4A, OGG) are supported. PDFs, documents, and chat files are not allowed.';
+
+const MAX_PERSISTED_MEDIA_BYTES = 35 * 1024 * 1024; // 35 MB
 
 function sanitizePathSegment(raw: string): string {
   const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '');
@@ -346,10 +355,34 @@ export class MemoryVaultService {
       typeof obj.mediaMimeType === 'string'
         ? obj.mediaMimeType.trim().toLowerCase()
         : '';
+    const mediaFileName =
+      typeof obj.mediaFileName === 'string'
+        ? obj.mediaFileName.trim().toLowerCase()
+        : '';
+    const declaredType = String(obj.mediaType || obj.type || '')
+      .trim()
+      .toLowerCase();
+
     if (mime && DISALLOWED_MIME_TYPES.has(mime)) {
       return {
         ok: false,
         error: `Memory "${id}" has a disallowed MIME type (${mime}).`,
+      };
+    }
+
+    // Strictly reject PDFs, documents, and chat file uploads
+    if (
+      declaredType === 'document' ||
+      declaredType === 'chat' ||
+      declaredType === 'pdf' ||
+      (mediaFileName && DISALLOWED_VAULT_FILE_EXT_RE.test(mediaFileName)) ||
+      (mime &&
+        mime !== 'application/octet-stream' &&
+        !ALLOWED_PERSISTED_MEDIA_MIMES[mime])
+    ) {
+      return {
+        ok: false,
+        error: `Unsupported file type for "${title}". ${SUPPORTED_VAULT_FORMATS_ERROR}`,
       };
     }
 
@@ -359,12 +392,32 @@ export class MemoryVaultService {
     let storedMediaFile: VaultStoredMediaFile | undefined =
       existingRecord?.storedMediaFile;
 
-    // Persist inline uploaded image/media binary onto project disk under data/media/<userId>/<memoryId>.<ext>
+    // Reject inline data URLs with unsupported MIME types (e.g. data:application/pdf)
+    for (const candidateUri of [safeMediaUrl, safeCustomImageUrl]) {
+      if (candidateUri && candidateUri.startsWith('data:')) {
+        const commaIdx = candidateUri.indexOf(',');
+        if (commaIdx !== -1) {
+          const dataMime = candidateUri
+            .slice(5, commaIdx)
+            .split(';')[0]
+            .trim()
+            .toLowerCase();
+          if (dataMime && !ALLOWED_PERSISTED_MEDIA_MIMES[dataMime]) {
+            return {
+              ok: false,
+              error: `Unsupported media payload "${dataMime}". ${SUPPORTED_VAULT_FORMATS_ERROR}`,
+            };
+          }
+        }
+      }
+    }
+
+    // Persist primary uploaded binary (prioritizing mediaUrl so video/audio files are saved rather than video poster thumbnails)
     const inlineCandidate =
+      (safeMediaUrl && safeMediaUrl.startsWith('data:') ? safeMediaUrl : undefined) ||
       (safeCustomImageUrl && safeCustomImageUrl.startsWith('data:')
         ? safeCustomImageUrl
-        : undefined) ||
-      (safeMediaUrl && safeMediaUrl.startsWith('data:') ? safeMediaUrl : undefined);
+        : undefined);
 
     if (inlineCandidate) {
       const savedFile = this.persistInlineMediaToDisk(userId, id, inlineCandidate);

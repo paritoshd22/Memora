@@ -18,7 +18,9 @@ import {
 } from '../types/curation';
 import { Memory } from '../types/museum';
 import {
+  buildDirectlyPlacedMemoryFromFile,
   prepareFileForAutoCuration,
+  UPLOAD_ACCEPT_ATTRIBUTE,
   validateUploadFileCandidate,
 } from '../utils/clientMediaExtractor';
 
@@ -48,6 +50,9 @@ interface ChildhoodMemoryAssistantProps {
   userId?: string | null;
   sessionToken?: string | null;
   onStartQuickUpload: (items: CurationBatchItemInput[]) => void;
+  onDirectUploadMemories?: (
+    newMemories: Memory[],
+  ) => Promise<{ ok: boolean; savedMemories: Memory[]; errorMessage?: string }>;
   onOpenFullUploadModal: () => void;
   onSelectMemoryById: (memoryId: string) => void;
   onMemoryUpdatedFromAssistant: (updatedMemory: Memory) => void;
@@ -61,6 +66,7 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
   userId,
   sessionToken,
   onStartQuickUpload,
+  onDirectUploadMemories,
   onOpenFullUploadModal,
   onSelectMemoryById,
   onMemoryUpdatedFromAssistant,
@@ -196,7 +202,8 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
     e.target.value = '';
     if (files.length === 0) return;
 
-    const prepared: CurationBatchItemInput[] = [];
+    const directMemories: Memory[] = [];
+    const fallbackPrepared: CurationBatchItemInput[] = [];
     const rejectedReasons: string[] = [];
     const seenKeys = new Set<string>();
 
@@ -214,8 +221,16 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
         continue;
       }
       try {
-        const item = await prepareFileForAutoCuration(file);
-        prepared.push(item);
+        if (onDirectUploadMemories) {
+          const { memory } = await buildDirectlyPlacedMemoryFromFile(file, {
+            roomId: 'childhood',
+            ownerId: userId || undefined,
+          });
+          directMemories.push(memory);
+        } else {
+          const item = await prepareFileForAutoCuration(file);
+          fallbackPrepared.push(item);
+        }
       } catch {
         rejectedReasons.push(
           `"${file.name}" could not be read. Please verify the file and try again.`,
@@ -235,8 +250,23 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
       setIsOpen(true);
     }
 
-    if (prepared.length > 0) {
-      onStartQuickUpload(prepared);
+    if (directMemories.length > 0 && onDirectUploadMemories) {
+      const result = await onDirectUploadMemories(directMemories);
+      if (!result.ok) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `err-save-${Date.now()}`,
+            role: 'error',
+            content:
+              result.errorMessage ||
+              'Could not save uploaded memories to storage. Please try again.',
+          },
+        ]);
+        setIsOpen(true);
+      }
+    } else if (fallbackPrepared.length > 0) {
+      onStartQuickUpload(fallbackPrepared);
     }
   };
 
@@ -405,7 +435,7 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/*,audio/*,.pdf,.txt"
+        accept={UPLOAD_ACCEPT_ATTRIBUTE}
         multiple
         className="hidden"
         onChange={handleDirectFileSelect}
@@ -415,11 +445,11 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={onOpenFullUploadModal}
             className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-[#854D27] text-[#FFFCF6] text-xs font-semibold shadow-lg hover:bg-[#6E3E1F] border border-[#D6A15D]/50 cursor-pointer"
           >
             <Upload className="w-3.5 h-3.5 text-[#F6E2B3]" />
-            <span>Add Photo</span>
+            <span>Add Memory</span>
           </button>
           <button
             type="button"

@@ -32,7 +32,6 @@ export const ALLOWED_IMAGE_MIME_TYPES = new Set<string>([
   'image/jpg',
   'image/png',
   'image/webp',
-  'image/gif',
 ]);
 
 export const ALLOWED_AUDIO_MIME_TYPES = new Set<string>([
@@ -45,50 +44,31 @@ export const ALLOWED_AUDIO_MIME_TYPES = new Set<string>([
   'audio/m4a',
   'audio/x-m4a',
   'audio/ogg',
-  'audio/aac',
-  'audio/flac',
-  'audio/webm',
 ]);
 
 export const ALLOWED_VIDEO_MIME_TYPES = new Set<string>([
   'video/mp4',
   'video/quicktime',
   'video/webm',
-  'video/x-m4v',
-  'video/x-matroska',
 ]);
 
-export const ALLOWED_DOCUMENT_MIME_TYPES = new Set<string>([
-  'application/pdf',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-  'application/rtf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-]);
+export const ALLOWED_DOCUMENT_MIME_TYPES = new Set<string>([]);
 
 export const SUPPORTED_SERVER_EXTENSIONS = new Set<string>([
   'jpg',
   'jpeg',
   'png',
   'webp',
-  'gif',
-  'heic',
-  'avif',
   'mp4',
   'mov',
   'webm',
-  'm4v',
-  'mkv',
   'mp3',
   'wav',
   'm4a',
   'ogg',
-  'aac',
-  'flac',
-  'weba',
+]);
+
+export const DISALLOWED_BINARY_EXTENSIONS = new Set<string>([
   'pdf',
   'txt',
   'md',
@@ -98,9 +78,16 @@ export const SUPPORTED_SERVER_EXTENSIONS = new Set<string>([
   'doc',
   'docx',
   'rtf',
-]);
-
-export const DISALLOWED_BINARY_EXTENSIONS = new Set<string>([
+  'xls',
+  'xlsx',
+  'ppt',
+  'pptx',
+  'html',
+  'htm',
+  'xml',
+  'eml',
+  'msg',
+  'chat',
   'exe',
   'dll',
   'bat',
@@ -117,6 +104,9 @@ export const DISALLOWED_BINARY_EXTENSIONS = new Set<string>([
   'gz',
   'bin',
 ]);
+
+export const SUPPORTED_SERVER_FORMATS_MESSAGE =
+  'Only photos (JPG, JPEG, PNG, WEBP), videos (MP4, MOV, WEBM), and music/audio (MP3, WAV, M4A, OGG) are supported. PDFs, documents, and chat files are not allowed.';
 
 export const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10 MB decoded image limit
 export const MAX_AUDIO_BASE64_BYTES = 8 * 1024 * 1024; // 8 MB decoded audio limit
@@ -338,6 +328,9 @@ export function validateMemoryUploadMediaInput(item: {
 }): MediaUploadValidationResult {
   const fileName = String(item.fileName || '').trim();
   const mimeType = String(item.mimeType || '').trim().toLowerCase();
+  const declaredMediaType = String(item.detectedMediaType || item.sourceType || '')
+    .trim()
+    .toLowerCase();
   const extMatch = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
   const ext = extMatch ? extMatch[1] : '';
 
@@ -350,12 +343,26 @@ export function validateMemoryUploadMediaInput(item: {
     };
   }
 
-  if (ext && DISALLOWED_BINARY_EXTENSIONS.has(ext)) {
+  if (
+    declaredMediaType === 'document' ||
+    declaredMediaType === 'chat' ||
+    declaredMediaType === 'pdf' ||
+    (typeof item.documentBase64 === 'string' && item.documentBase64.trim().length > 0)
+  ) {
     return {
       ok: false,
       code: 'INVALID_INPUT',
       httpStatus: 400,
-      errorMessage: `"${fileName}" is not a supported memory file type. Please upload photos (JPG, PNG, WebP, GIF), videos (MP4, WebM, MOV), audio (MP3, WAV, M4A, OGG), or text/documents (TXT, PDF, MD, DOCX).`,
+      errorMessage: `"${fileName || 'Uploaded file'}" is not supported. ${SUPPORTED_SERVER_FORMATS_MESSAGE}`,
+    };
+  }
+
+  if (ext && (DISALLOWED_BINARY_EXTENSIONS.has(ext) || !SUPPORTED_SERVER_EXTENSIONS.has(ext))) {
+    return {
+      ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
+      errorMessage: `"${fileName}" is not supported. ${SUPPORTED_SERVER_FORMATS_MESSAGE}`,
     };
   }
 
@@ -364,25 +371,14 @@ export function validateMemoryUploadMediaInput(item: {
     mimeType === 'application/octet-stream' ||
     ALLOWED_IMAGE_MIME_TYPES.has(mimeType) ||
     ALLOWED_AUDIO_MIME_TYPES.has(mimeType) ||
-    ALLOWED_VIDEO_MIME_TYPES.has(mimeType) ||
-    ALLOWED_DOCUMENT_MIME_TYPES.has(mimeType) ||
-    mimeType.startsWith('text/');
+    ALLOWED_VIDEO_MIME_TYPES.has(mimeType);
 
   if (mimeType && mimeType !== 'application/octet-stream' && !isKnownMime) {
     return {
       ok: false,
       code: 'INVALID_INPUT',
       httpStatus: 400,
-      errorMessage: `Unsupported file format "${mimeType}" for "${fileName || 'uploaded file'}". Supported memory types: photos, videos, audio, and text/documents.`,
-    };
-  }
-
-  if (mimeType === 'application/octet-stream' && ext && !SUPPORTED_SERVER_EXTENSIONS.has(ext)) {
-    return {
-      ok: false,
-      code: 'INVALID_INPUT',
-      httpStatus: 400,
-      errorMessage: `"${fileName}" has an unsupported file extension ".${ext}". Supported memory types: photos, videos, audio, and text/documents.`,
+      errorMessage: `Unsupported file format "${mimeType}" for "${fileName || 'uploaded file'}". ${SUPPORTED_SERVER_FORMATS_MESSAGE}`,
     };
   }
 
@@ -406,23 +402,7 @@ export function validateMemoryUploadMediaInput(item: {
         ok: false,
         code: 'INVALID_INPUT',
         httpStatus: 400,
-        errorMessage: `Unsupported audio MIME type "${audioMime}". Supported audio formats: MP3, WAV, M4A, OGG, AAC, FLAC, WebM.`,
-      };
-    }
-  }
-
-  if (typeof item.documentBase64 === 'string' && item.documentBase64.trim().length > 0) {
-    const cleanedDoc = item.documentBase64
-      .trim()
-      .replace(/^data:[^;]+;base64,/i, '')
-      .replace(/\s+/g, '');
-    const docBytes = Math.floor((cleanedDoc.length * 3) / 4);
-    if (docBytes > MAX_DOCUMENT_BASE64_BYTES) {
-      return {
-        ok: false,
-        code: 'PAYLOAD_TOO_LARGE',
-        httpStatus: 413,
-        errorMessage: `Document (${(docBytes / (1024 * 1024)).toFixed(1)} MB) exceeds the 8 MB server analysis limit.`,
+        errorMessage: `Unsupported audio MIME type "${audioMime}". Supported music/audio formats: MP3, WAV, M4A, OGG.`,
       };
     }
   }

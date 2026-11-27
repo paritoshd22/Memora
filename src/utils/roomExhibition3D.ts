@@ -5336,14 +5336,14 @@ export function buildExhibitionRoom3DScene(params: {
 
     const wardrobeMem = findLinkedMemoryForObject(
       'wardrobe',
-      /wardrobe|outfit|dress|uniform|school|clothes|jacket/,
+      /wardrobe|cupboard|photo|outfit|dress|uniform|school|clothes|jacket/,
     );
     registerInteractiveHitbox(
       wardrobeGroup,
       'wardrobe',
       'bedroom',
-      'Walnut Childhood Wardrobe',
-      'Click or press [E] to open wardrobe door & inspect keepsakes inside',
+      'Cupboard — Photo Collection',
+      'Click or press [E] to open the cupboard and browse uploaded photos',
       [1.15, 2.0, 0.85],
       [0, 1.0, 0.15],
       wardrobeMem,

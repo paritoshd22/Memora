@@ -1,6 +1,5 @@
 import { CurationBatchItemInput } from '../types/curation';
 import { MemoryMediaType } from '../types/museum';
-import { parseChatExportText } from './curationValidator';
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -8,15 +7,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onload = () => resolve(String(reader.result || ''));
     reader.onerror = () => reject(reader.error || new Error('Failed to read file.'));
     reader.readAsDataURL(file);
-  });
-}
-
-function readFileAsText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('Failed to read text file.'));
-    reader.readAsText(file);
   });
 }
 
@@ -134,38 +124,108 @@ async function extractVideoKeyframes(
   }
 }
 
-export const MAX_UPLOAD_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB max per file
+export const MAX_UPLOAD_FILE_SIZE_BYTES = 35 * 1024 * 1024; // 35 MB max per file
+
+export const SUPPORTED_PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'] as const;
+export const SUPPORTED_VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm'] as const;
+export const SUPPORTED_AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'ogg'] as const;
 
 export const SUPPORTED_UPLOAD_EXTENSIONS = [
-  'jpg',
-  'jpeg',
-  'png',
-  'webp',
-  'gif',
-  'heic',
-  'avif',
-  'mp4',
-  'mov',
-  'webm',
-  'm4v',
-  'mkv',
-  'mp3',
-  'wav',
-  'm4a',
-  'ogg',
-  'aac',
-  'flac',
-  'weba',
-  'pdf',
-  'txt',
-  'md',
-  'json',
-  'csv',
-  'log',
-  'doc',
-  'docx',
-  'rtf',
+  ...SUPPORTED_PHOTO_EXTENSIONS,
+  ...SUPPORTED_VIDEO_EXTENSIONS,
+  ...SUPPORTED_AUDIO_EXTENSIONS,
 ] as const;
+
+export const SUPPORTED_PHOTO_MIMES = new Set<string>([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+]);
+
+export const SUPPORTED_VIDEO_MIMES = new Set<string>([
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+]);
+
+export const SUPPORTED_AUDIO_MIMES = new Set<string>([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/ogg',
+]);
+
+export const UPLOAD_ACCEPT_ATTRIBUTE =
+  '.jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.mp3,.wav,.m4a,.ogg,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,audio/mpeg,audio/wav,audio/mp4,audio/ogg';
+
+export const SUPPORTED_UPLOAD_FORMATS_MESSAGE =
+  'Only photos (JPG, JPEG, PNG, WEBP), videos (MP4, MOV, WEBM), and music/audio (MP3, WAV, M4A, OGG) are supported. PDFs, documents, and chat files are not allowed.';
+
+export type DirectUploadMediaKind = 'image' | 'video' | 'audio';
+
+export interface AutomaticRoomPlacement {
+  mediaKind: DirectUploadMediaKind;
+  destinationId: 'radio' | 'projector' | 'cupboard';
+  destinationLabel: string;
+  curatedZoneId: 'memory_radio' | 'outdoor_cinema' | 'memory_wall';
+  linkedObjectId: 'memory_radio' | 'memory_projector' | 'wardrobe';
+  linkedSpaceId: 'bedroom';
+  placementTarget: 'audio_booth' | 'cinema_screen' | 'wall_frame';
+  linked3DObject: string;
+  category: 'Photo' | 'Video' | 'Audio';
+  subtitle: string;
+}
+
+export function resolveAutomaticRoomPlacement(
+  mediaKind: DirectUploadMediaKind,
+): AutomaticRoomPlacement {
+  if (mediaKind === 'audio') {
+    return {
+      mediaKind: 'audio',
+      destinationId: 'radio',
+      destinationLabel: 'Radio',
+      curatedZoneId: 'memory_radio',
+      linkedObjectId: 'memory_radio',
+      linkedSpaceId: 'bedroom',
+      placementTarget: 'audio_booth',
+      linked3DObject: 'Vintage Memory Radio',
+      category: 'Audio',
+      subtitle: 'Radio Track',
+    };
+  }
+  if (mediaKind === 'video') {
+    return {
+      mediaKind: 'video',
+      destinationId: 'projector',
+      destinationLabel: 'Projector',
+      curatedZoneId: 'outdoor_cinema',
+      linkedObjectId: 'memory_projector',
+      linkedSpaceId: 'bedroom',
+      placementTarget: 'cinema_screen',
+      linked3DObject: 'Memory Projector',
+      category: 'Video',
+      subtitle: 'Projector Film',
+    };
+  }
+  return {
+    mediaKind: 'image',
+    destinationId: 'cupboard',
+    destinationLabel: 'Cupboard & Photo Display',
+    curatedZoneId: 'memory_wall',
+    linkedObjectId: 'wardrobe',
+    linkedSpaceId: 'bedroom',
+    placementTarget: 'wall_frame',
+    linked3DObject: 'Cupboard & Photo Display',
+    category: 'Photo',
+    subtitle: 'Cupboard & Photo Display',
+  };
+}
 
 export interface UploadFileValidationResult {
   valid: boolean;
@@ -175,8 +235,66 @@ export interface UploadFileValidationResult {
     | 'UNSUPPORTED_FORMAT'
     | 'DUPLICATE_MEMORY';
   reason?: string;
-  detectedMediaType?: MemoryMediaType;
+  detectedMediaType?: DirectUploadMediaKind;
   dedupKey: string;
+}
+
+function resolveAllowedDirectMediaKind(
+  fileName: string,
+  mimeType: string,
+): DirectUploadMediaKind | null {
+  const normalizedName = (fileName || '').trim().toLowerCase();
+  const normalizedMime = (mimeType || '').trim().toLowerCase();
+  const extMatch = normalizedName.match(/\.([a-z0-9]+)$/i);
+  const ext = extMatch ? extMatch[1].toLowerCase() : '';
+
+  // Explicitly block PDFs, documents, text, and chat files regardless of MIME quirks
+  if (
+    /\.(pdf|txt|md|json|csv|log|doc|docx|rtf|xls|xlsx|ppt|pptx|html|htm|xml|eml|msg|chat|zip|rar|7z|tar|gz|exe|dll|bat|sh|dmg|iso|apk|msi)$/i.test(
+      normalizedName,
+    )
+  ) {
+    return null;
+  }
+  if (
+    normalizedMime === 'application/pdf' ||
+    normalizedMime.startsWith('text/') ||
+    normalizedMime === 'application/json' ||
+    normalizedMime === 'application/rtf' ||
+    normalizedMime === 'application/msword' ||
+    normalizedMime ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    return null;
+  }
+
+  const isPhotoExt = (SUPPORTED_PHOTO_EXTENSIONS as readonly string[]).includes(ext);
+  const isVideoExt = (SUPPORTED_VIDEO_EXTENSIONS as readonly string[]).includes(ext);
+  const isAudioExt = (SUPPORTED_AUDIO_EXTENSIONS as readonly string[]).includes(ext);
+
+  const isPhotoMime = SUPPORTED_PHOTO_MIMES.has(normalizedMime);
+  const isVideoMime = SUPPORTED_VIDEO_MIMES.has(normalizedMime);
+  const isAudioMime = SUPPORTED_AUDIO_MIMES.has(normalizedMime);
+
+  // If extension is present, it MUST be one of the strictly supported extensions
+  if (ext) {
+    if (isPhotoExt && (!normalizedMime || normalizedMime === 'application/octet-stream' || isPhotoMime)) {
+      return 'image';
+    }
+    if (isVideoExt && (!normalizedMime || normalizedMime === 'application/octet-stream' || isVideoMime)) {
+      return 'video';
+    }
+    if (isAudioExt && (!normalizedMime || normalizedMime === 'application/octet-stream' || isAudioMime)) {
+      return 'audio';
+    }
+    return null;
+  }
+
+  // Fallback when filename has no extension: check strict MIME
+  if (isPhotoMime) return 'image';
+  if (isVideoMime) return 'video';
+  if (isAudioMime) return 'audio';
+  return null;
 }
 
 export function validateUploadFileCandidate(
@@ -198,7 +316,7 @@ export function validateUploadFileCandidate(
     return {
       valid: false,
       code: 'EMPTY_FILE',
-      reason: `"${fileName || 'File'}" is empty (0 bytes) and cannot be processed.`,
+      reason: `"${fileName || 'File'}" is empty (0 bytes) and cannot be uploaded.`,
       dedupKey,
     };
   }
@@ -207,37 +325,17 @@ export function validateUploadFileCandidate(
     return {
       valid: false,
       code: 'FILE_TOO_LARGE',
-      reason: `"${fileName}" exceeds the 50 MB file size limit (${(size / (1024 * 1024)).toFixed(1)} MB).`,
+      reason: `"${fileName}" exceeds the 35 MB file size limit (${(size / (1024 * 1024)).toFixed(1)} MB).`,
       dedupKey,
     };
   }
 
-  const extMatch = normalizedName.match(/\.([a-z0-9]+)$/i);
-  const ext = extMatch ? extMatch[1].toLowerCase() : '';
-  const hasSupportedExt = (
-    SUPPORTED_UPLOAD_EXTENSIONS as readonly string[]
-  ).includes(ext);
-  const hasSupportedMime =
-    mimeType.startsWith('image/') ||
-    mimeType.startsWith('video/') ||
-    mimeType.startsWith('audio/') ||
-    mimeType === 'application/pdf' ||
-    mimeType.startsWith('text/') ||
-    mimeType === 'application/json' ||
-    mimeType === 'application/rtf' ||
-    mimeType === 'application/msword' ||
-    mimeType ===
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-
-  const isDisallowedBinary = /\.(exe|dll|bat|sh|dmg|iso|apk|msi|zip|rar|7z|tar|gz)$/i.test(
-    normalizedName,
-  );
-
-  if (isDisallowedBinary || (!hasSupportedExt && !hasSupportedMime)) {
+  const detected = resolveAllowedDirectMediaKind(fileName, mimeType);
+  if (!detected) {
     return {
       valid: false,
       code: 'UNSUPPORTED_FORMAT',
-      reason: `"${fileName}" is not a supported memory format. Supported formats: JPG, PNG, WEBP, MP4, WebM, MP3, WAV, M4A, PDF, TXT, DOC/DOCX, and Chat exports.`,
+      reason: `"${fileName}" is not supported. ${SUPPORTED_UPLOAD_FORMATS_MESSAGE}`,
       dedupKey,
     };
   }
@@ -260,7 +358,7 @@ export function validateUploadFileCandidate(
     return {
       valid: false,
       code: 'DUPLICATE_MEMORY',
-      reason: `"${fileName}" is already preserved in your MEMORA archive.`,
+      reason: `"${fileName}" is already saved in your room.`,
       dedupKey,
     };
   }
@@ -271,7 +369,7 @@ export function validateUploadFileCandidate(
 
   return {
     valid: true,
-    detectedMediaType: detectMediaTypeFromFile(fileName, mimeType),
+    detectedMediaType: detected,
     dedupKey,
   };
 }
@@ -280,115 +378,83 @@ export function extractReadableDocumentText(
   rawText: string,
   fileName: string,
 ): string {
-  if (!rawText) return '';
-  const lower = (fileName || '').toLowerCase();
-  if (lower.endsWith('.rtf')) {
-    return rawText
+  const text = (rawText || '').trim();
+  if (!text) return '';
+  if (/\.rtf$/i.test(fileName) || text.startsWith('{\\rtf')) {
+    return text
+      .replace(/\{\\\*[^{}]*\}/g, ' ')
+      .replace(/\{\\fonttbl[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, ' ')
       .replace(/\\par[d]?/g, '\n')
-      .replace(/\{\*?\\[^{}]+}|[{}]|\\\n?[A-Za-z]+\n?(?:-?\d+)?[ ]?/g, '')
-      .replace(/\s+/g, ' ')
+      .replace(/\\'[0-9a-fA-F]{2}/g, ' ')
+      .replace(/\\[a-zA-Z]+-?\d*\s?/g, '')
+      .replace(/[{}]/g, '')
+      .replace(/\s+\n/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
       .trim();
   }
-  if (lower.endsWith('.docx') || lower.endsWith('.doc')) {
-    // Extract readable XML/ASCII text runs if present without corrupting binary bytes
-    const xmlMatches = rawText.match(/<w:t[^>]*>([^<]+)<\/w:t>/g);
-    if (xmlMatches && xmlMatches.length > 0) {
-      return xmlMatches
-        .map((m) => m.replace(/<[^>]+>/g, ''))
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
-    const printableRuns = rawText.match(/[A-Za-z0-9 ,.;:'"?!()\-\n]{12,}/g);
-    if (printableRuns && printableRuns.length > 0) {
-      return printableRuns.join(' ').slice(0, 8000).trim();
-    }
-    return '';
-  }
-  return rawText.trim();
+  return text;
 }
 
 export function detectMediaTypeFromFile(
   fileName: string,
   mimeType: string,
-  textSample?: string,
+  _textSample?: string,
 ): MemoryMediaType {
+  const allowed = resolveAllowedDirectMediaKind(fileName, mimeType);
+  if (allowed) return allowed;
   const lowerName = (fileName || '').toLowerCase();
   const lowerMime = (mimeType || '').toLowerCase();
-
-  if (lowerMime.startsWith('image/') || /\.(jpe?g|png|webp|gif|heic|avif)$/i.test(lowerName)) {
+  if (lowerMime.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(lowerName)) {
     return 'image';
   }
-  if (lowerMime.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv)$/i.test(lowerName)) {
+  if (lowerMime.startsWith('video/') || /\.(mp4|mov|webm)$/i.test(lowerName)) {
     return 'video';
   }
-  if (lowerMime.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|aac|flac|weba)$/i.test(lowerName)) {
+  if (lowerMime.startsWith('audio/') || /\.(mp3|wav|m4a|ogg)$/i.test(lowerName)) {
     return 'audio';
   }
-
-  if (textSample) {
-    const chatCheck = parseChatExportText(textSample, fileName);
-    if (
-      chatCheck.formatDetected === 'whatsapp' ||
-      chatCheck.formatDetected === 'imessage' ||
-      chatCheck.formatDetected === 'json' ||
-      (chatCheck.messages.length >= 2 && chatCheck.participants.length >= 2)
-    ) {
-      return 'chat';
-    }
-  }
-
-  if (/\b(whatsapp|imessage|chat|messages|conversation)\b/i.test(lowerName)) {
-    return 'chat';
-  }
-
-  if (/\b(certificate|diploma|award|transcript|report[-_ ]card)\b/i.test(lowerName)) {
-    return 'certificate';
-  }
-
-  if (
-    lowerMime === 'application/pdf' ||
-    /\.(pdf|docx?|rtf)$/i.test(lowerName)
-  ) {
-    return 'document';
-  }
-
-  if (/\.(txt|md|json|csv|log)$/i.test(lowerName) || lowerMime.startsWith('text/')) {
-    if (textSample && textSample.length < 4000 && !/whatsapp|chat/i.test(lowerName)) {
-      return 'story';
-    }
-    return 'document';
-  }
-
   return 'document';
+}
+
+function inferMimeFromExtension(fileName: string, fallbackMime: string): string {
+  if (fallbackMime && fallbackMime !== 'application/octet-stream') {
+    return fallbackMime.toLowerCase();
+  }
+  const extMatch = (fileName || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+  const ext = extMatch ? extMatch[1] : '';
+  const map: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    webm: 'video/webm',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    m4a: 'audio/mp4',
+    ogg: 'audio/ogg',
+  };
+  return map[ext] || fallbackMime || 'application/octet-stream';
+}
+
+function deriveCleanTitleFromFileName(fileName: string): string {
+  const withoutExt = (fileName || 'Uploaded Memory').replace(/\.[^.]+$/, '');
+  const spaced = withoutExt.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return spaced || 'Uploaded Memory';
 }
 
 export async function prepareFileForAutoCuration(
   file: File,
 ): Promise<CurationBatchItemInput> {
-  const tempId = `batch_item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const mimeType = file.type || 'application/octet-stream';
-  const lowerName = file.name.toLowerCase();
-
-  const isTextLike =
-    mimeType.startsWith('text/') ||
-    mimeType === 'application/json' ||
-    mimeType === 'application/rtf' ||
-    /\.(txt|md|json|csv|log|rtf|docx?)$/i.test(lowerName);
-
-  let rawTextContent: string | undefined;
-  if (isTextLike) {
-    const rawRead = await readFileAsText(file).catch(() => '');
-    rawTextContent = extractReadableDocumentText(rawRead, file.name);
+  const check = validateUploadFileCandidate(file);
+  if (!check.valid || !check.detectedMediaType) {
+    throw new Error(check.reason || SUPPORTED_UPLOAD_FORMATS_MESSAGE);
   }
-
-  const detectedMediaType = detectMediaTypeFromFile(
-    file.name,
-    mimeType,
-    rawTextContent,
-  );
-
-  const originalDataUrl = await readFileAsDataUrl(file).catch(() => undefined);
+  const tempId = `batch_item_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const mimeType = inferMimeFromExtension(file.name, file.type);
+  const detectedMediaType = check.detectedMediaType;
+  const originalDataUrl = await readFileAsDataUrl(file);
 
   const result: CurationBatchItemInput = {
     tempId,
@@ -397,7 +463,6 @@ export async function prepareFileForAutoCuration(
     detectedMediaType,
     sizeBytes: file.size,
     originalDataUrl,
-    rawTextContent,
     captureSource: 'upload',
   };
 
@@ -410,49 +475,120 @@ export async function prepareFileForAutoCuration(
     result.videoKeyframesBase64 = kf.keyframesBase64;
     result.videoDurationSeconds = kf.durationSeconds;
   } else if (detectedMediaType === 'audio' && originalDataUrl) {
-    // Keep server transfer within express json limit (~7MB base64 max)
     if (originalDataUrl.length < 7_500_000) {
       result.audioBase64 = originalDataUrl.replace(/^data:[^;]+;base64,/, '');
       result.audioMimeType = mimeType.startsWith('audio/') ? mimeType : 'audio/mpeg';
     }
-  } else if (
-    (detectedMediaType === 'document' || detectedMediaType === 'certificate') &&
-    mimeType === 'application/pdf' &&
-    originalDataUrl &&
-    originalDataUrl.length < 6_500_000
-  ) {
-    result.documentBase64 = originalDataUrl.replace(/^data:[^;]+;base64,/, '');
   }
 
   return result;
 }
 
-export function prepareTextMemoryForAutoCuration(params: {
-  text: string;
-  titleHint?: string;
-}): CurationBatchItemInput {
-  const trimmed = (params.text || '').trim();
-  const chatCheck = parseChatExportText(trimmed);
-  const looksLikeChat =
-    chatCheck.formatDetected === 'whatsapp' ||
-    chatCheck.formatDetected === 'imessage' ||
-    chatCheck.formatDetected === 'json' ||
-    (chatCheck.messages.length >= 2 && chatCheck.participants.length >= 2);
+/**
+ * Prepares a validated Photo, Video, or Music file directly for immediate
+ * persistence and automatic room placement (Cupboard & Photo Display, Projector, or Radio)
+ * without requiring Gemini.
+ */
+export async function buildDirectlyPlacedMemoryFromFile(
+  file: File,
+  options: {
+    roomId: string;
+    ownerId?: string;
+    userTitle?: string;
+    userDescription?: string;
+    userDate?: string;
+  },
+): Promise<{
+  memory: import('../types/museum').Memory;
+  placement: AutomaticRoomPlacement;
+}> {
+  const check = validateUploadFileCandidate(file);
+  if (!check.valid || !check.detectedMediaType) {
+    throw new Error(check.reason || SUPPORTED_UPLOAD_FORMATS_MESSAGE);
+  }
 
-  const safeTitle = (params.titleHint || '').trim();
-  const fileName = looksLikeChat
-    ? safeTitle || 'Archived Chat Conversation.txt'
-    : safeTitle || 'Personal Written Memory.txt';
+  const mediaKind = check.detectedMediaType;
+  const mimeType = inferMimeFromExtension(file.name, file.type);
+  const placement = resolveAutomaticRoomPlacement(mediaKind);
+  const originalDataUrl = await readFileAsDataUrl(file);
 
-  return {
-    tempId: `batch_text_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    fileName,
-    mimeType: 'text/plain',
-    detectedMediaType: looksLikeChat ? 'chat' : 'story',
-    rawTextContent: trimmed,
-    originalDataUrl: undefined,
-    captureSource: 'written',
+  let videoPosterDataUrl: string | undefined;
+  if (mediaKind === 'video') {
+    const kf = await extractVideoKeyframes(file).catch(() => ({
+      keyframesBase64: [],
+      durationSeconds: 0,
+    }));
+    if (kf.keyframesBase64[0]) {
+      videoPosterDataUrl = `data:image/jpeg;base64,${kf.keyframesBase64[0]}`;
+    }
+  }
+
+  const now = new Date();
+  const id = `mem-upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const cleanTitle = (options.userTitle || '').trim() || deriveCleanTitleFromFileName(file.name);
+  const cleanDescription = (options.userDescription || '').trim();
+  const cleanDate = (options.userDate || '').trim();
+  const yearMatch = cleanDate.match(/\b(19|20)\d{2}\b/);
+  const parsedYear = yearMatch ? Number(yearMatch[0]) : now.getFullYear();
+
+  const memory: import('../types/museum').Memory = {
+    id,
+    ownerId: options.ownerId,
+    roomId: options.roomId || 'childhood',
+    title: cleanTitle,
+    subtitle: placement.subtitle,
+    date: cleanDate,
+    year: parsedYear,
+    location: placement.destinationLabel,
+    category: placement.category,
+    type: mediaKind,
+    mediaType: mediaKind,
+    mediaUrl: originalDataUrl,
+    customImageUrl: mediaKind === 'image' ? originalDataUrl : videoPosterDataUrl,
+    mediaMimeType: mimeType,
+    mediaFileName: file.name,
+    audioKind: mediaKind === 'audio' ? 'music' : undefined,
+    description:
+      cleanDescription ||
+      (mediaKind === 'audio'
+        ? `Uploaded music track placed on the room Radio (${file.name}).`
+        : mediaKind === 'video'
+          ? `Uploaded video placed in the room Projector (${file.name}).`
+          : `Uploaded photo placed in the Cupboard & Photo Display (${file.name}).`),
+    story: cleanDescription,
+    accessionNumber: `ACC.${parsedYear}.${id.slice(-4).toUpperCase()}`,
+    motif:
+      mediaKind === 'audio'
+        ? 'courtyard_lanterns'
+        : mediaKind === 'video'
+          ? 'observatory_stars'
+          : 'treehouse_meadow',
+    palette:
+      mediaKind === 'audio'
+        ? ['#F2DEC0', '#C9A66B', '#3E2B1E', '#E6B86A']
+        : mediaKind === 'video'
+          ? ['#E9DEC9', '#8A633C', '#241C16', '#D6A15D']
+          : ['#F4D8AF', '#D38B52', '#442D1C', '#D6A15D'],
+    tags: [
+      mediaKind === 'audio' ? 'radio' : mediaKind === 'video' ? 'projector' : 'photo',
+      placement.destinationId,
+    ],
+    curatedZoneId: placement.curatedZoneId,
+    placementTarget: placement.placementTarget,
+    linkedObjectId: placement.linkedObjectId,
+    linkedSpaceId: placement.linkedSpaceId,
+    linked3DObject: placement.linked3DObject,
+    hiddenFrom3D: false,
+    confirmationStatus: 'manual_no_ai',
+    userProvided: {
+      title: options.userTitle?.trim() || undefined,
+      description: cleanDescription || undefined,
+      date: cleanDate || undefined,
+    },
+    updatedAt: now.toISOString(),
   };
+
+  return { memory, placement };
 }
 
 export async function prepareCameraCaptureForAutoCuration(
@@ -462,7 +598,7 @@ export async function prepareCameraCaptureForAutoCuration(
   const compressed = await compressImageDataUrlForAnalysis(dataUrl);
   return {
     tempId: `batch_cam_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    fileName: label || `Captured Memory ${new Date().toLocaleTimeString()}.jpg`,
+    fileName: label || `Captured Photo ${new Date().toLocaleTimeString()}.jpg`,
     mimeType: 'image/jpeg',
     detectedMediaType: 'image',
     originalDataUrl: dataUrl,
@@ -471,3 +607,4 @@ export async function prepareCameraCaptureForAutoCuration(
     captureSource: 'camera',
   };
 }
+

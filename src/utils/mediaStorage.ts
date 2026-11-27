@@ -653,7 +653,7 @@ export function mergeServerAndLocalMemories(
   return Array.from(mergedById.values());
 }
 
-const MAX_SERVER_INLINE_MEDIA_CHARS = 14_000_000; // ~10 MB binary in Base64
+const MAX_SERVER_INLINE_MEDIA_CHARS = 48_000_000; // ~35 MB binary in Base64
 
 function compactMemoryForServerTransport(
   memory: Record<string, unknown>,

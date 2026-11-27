@@ -58,7 +58,7 @@ export interface BedroomCrtState {
 export interface BedroomProjectorState {
   poweredOn: boolean;
   slideIndex: number;
-  photoMemories: Memory[];
+  videoMemories: Memory[];
 }
 
 export interface BedroomDrawerState {
@@ -120,6 +120,7 @@ export interface ChildhoodBedroomInteractionController {
   // S-g: Memory Projector & Cricket bat
   toggleProjector: (forceOn?: boolean) => BedroomProjectorState;
   stepProjectorSlide: (dir: -1 | 1) => BedroomProjectorState;
+  selectProjectorIndex: (index: number) => BedroomProjectorState;
   getProjectorState: () => BedroomProjectorState;
   triggerCricketSwing: () => void;
   // Filtered real-memory buckets (strictly real uploaded memories, never invented)
@@ -309,11 +310,16 @@ export function attachChildhoodBedroomInteractions(
       m.linkedObjectId === 'school_bag' ||
       matchesKeywords(m, /school|class|notebook|exam|homework|teacher|bag|backpack|uniform|study|friend/),
   );
-  const wardrobeMemories = visibleMemories.filter(
+  const wardrobeExplicitPhotos = photoMemories.filter(
     (m) =>
       m.linkedObjectId === 'wardrobe' ||
-      matchesKeywords(m, /wardrobe|clothes|outfit|dress|uniform|jacket|costume|shirt|shoe|sweater/),
+      matchesKeywords(m, /wardrobe|cupboard|clothes|outfit|dress|uniform|jacket|costume|shirt|shoe|sweater/),
   );
+  const wardrobeExplicitIds = new Set(wardrobeExplicitPhotos.map((m) => m.id));
+  const wardrobeMemories = [
+    ...wardrobeExplicitPhotos,
+    ...photoMemories.filter((m) => !wardrobeExplicitIds.has(m.id)),
+  ];
   const cricketMemories = visibleMemories.filter(
     (m) =>
       m.linkedObjectId === 'cricket_set' ||
@@ -2349,12 +2355,17 @@ export function attachChildhoodBedroomInteractions(
   foldedGarment.position.set(0.18, 1.13, 0.02);
   wardrobeInteriorGroup.add(foldedGarment);
 
-  // Real uploaded keepsake photo frame tucked inside the upper cupboard shelf (zero fictional photos)
-  const wardrobeKeepsakePhoto = photoMemories[0] ?? null;
-  if (wardrobeKeepsakePhoto) {
+  // Real uploaded photo frames arranged inside the cupboard shelves (zero fictional photos)
+  const cupboardShelfSlots: Array<{ pos: [number, number, number]; rotY: number }> = [
+    { pos: [-0.22, 1.66, -0.04], rotY: 0.14 },
+    { pos: [0.16, 1.66, -0.04], rotY: -0.12 },
+    { pos: [-0.16, 1.24, -0.04], rotY: 0.1 },
+  ];
+  wardrobeMemories.slice(0, cupboardShelfSlots.length).forEach((photoMem, idx) => {
+    const slot = cupboardShelfSlots[idx];
     const innerFrameGroup = new THREE.Group();
-    innerFrameGroup.position.set(-0.08, 1.66, -0.04);
-    innerFrameGroup.rotation.y = 0.14;
+    innerFrameGroup.position.set(slot.pos[0], slot.pos[1], slot.pos[2]);
+    innerFrameGroup.rotation.y = slot.rotY;
     wardrobeInteriorGroup.add(innerFrameGroup);
 
     const frameBorder = new THREE.Mesh(
@@ -2366,8 +2377,8 @@ export function attachChildhoodBedroomInteractions(
     const innerPhotoMat = track(
       new THREE.MeshStandardMaterial({
         map: buildMiniFrameTexture(
-          wardrobeKeepsakePhoto,
-          'Wardrobe Keepsake',
+          photoMem,
+          'Cupboard Photo',
           '#C9A66B',
         ),
         color: 0xffffff,
@@ -2381,19 +2392,19 @@ export function attachChildhoodBedroomInteractions(
     innerPhotoPlane.position.z = 0.014;
     innerPhotoPlane.userData = {
       type: 'exhibit_memory',
-      memoryId: wardrobeKeepsakePhoto.id,
-      title: wardrobeKeepsakePhoto.title,
-      subtitle: 'Click to inspect original uploaded keepsake photograph',
+      memoryId: photoMem.id,
+      title: photoMem.title,
+      subtitle: 'Click to inspect uploaded photograph',
     };
     innerFrameGroup.add(innerPhotoPlane);
-  }
+  });
 
   zones.push({
     objectId: 'wardrobe',
     spaceId: 'bedroom',
-    title: 'Walnut Childhood Wardrobe',
-    promptVerb: 'Open wardrobe',
-    subtitle: 'Open cupboard door to inspect preserved clothes & keepsakes',
+    title: 'Cupboard — Photo Collection',
+    promptVerb: 'Open cupboard',
+    subtitle: 'Open cupboard to browse your uploaded photos',
     radius: 2.05,
     anchor: wardrobeGroup,
     getFocusCamera: () => {
@@ -2674,7 +2685,7 @@ export function attachChildhoodBedroomInteractions(
     'memory_radio',
     'bedroom',
     'Vintage Memory Radio',
-    'Press [E] or click to tune your uploaded voice recordings & music archive',
+    'Press [E] or click to select and play your uploaded music tracks',
     [0.62, 0.95, 0.52],
     [0, 0.48, 0],
     audioMemories[0],
@@ -2684,8 +2695,8 @@ export function attachChildhoodBedroomInteractions(
     objectId: 'memory_radio',
     spaceId: 'bedroom',
     title: 'Vintage Memory Radio',
-    promptVerb: 'Tune memory radio',
-    subtitle: 'Listen to uploaded voice memories & songs (never autoplays)',
+    promptVerb: 'Open memory radio',
+    subtitle: 'Select and play uploaded music & audio tracks (never autoplays)',
     radius: 1.9,
     anchor: radioGroup,
     getFocusCamera: () => ({
@@ -2809,7 +2820,7 @@ export function attachChildhoodBedroomInteractions(
   projFrameBar.position.set(0, 1.54, 0);
   projScreenStand.add(projFrameBar);
 
-  let projectorOn = false;
+  let projectorOn = videoMemories.length > 0;
   let projectorSlideIndex = 0;
 
   const renderProjectorSlide = () => {
@@ -2825,7 +2836,7 @@ export function attachChildhoodBedroomInteractions(
       ctx.fillStyle = '#8C7E6B';
       ctx.font = '600 16px Georgia, serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Memory Projector Screen (Off)', 256, 198);
+      ctx.fillText('Video Projector Screen (Off)', 256, 198);
       ctx.textAlign = 'left';
       projScreenMat.emissiveIntensity = 0.04;
       projTex.needsUpdate = true;
@@ -2834,15 +2845,19 @@ export function attachChildhoodBedroomInteractions(
 
     ctx.fillStyle = '#1E1A16';
     ctx.fillRect(0, 0, 512, 384);
-    const mem = photoMemories[projectorSlideIndex];
+    const safeIdx =
+      videoMemories.length > 0
+        ? Math.max(0, Math.min(projectorSlideIndex, videoMemories.length - 1))
+        : 0;
+    const mem = videoMemories[safeIdx];
     if (!mem) {
       ctx.fillStyle = '#FFF4DC';
       ctx.font = '700 20px Georgia, serif';
       ctx.textAlign = 'center';
-      ctx.fillText('No Uploaded Photographs Yet', 256, 178);
+      ctx.fillText('No Uploaded Videos Yet', 256, 178);
       ctx.font = '15px Georgia, serif';
       ctx.fillStyle = '#D6C29C';
-      ctx.fillText('Upload photos to project them on this bedroom screen.', 256, 212);
+      ctx.fillText('Upload MP4, MOV, or WEBM videos to watch them here.', 256, 212);
       ctx.textAlign = 'left';
     } else {
       const src = getMemoryImageSrc(mem);
@@ -2853,8 +2868,23 @@ export function attachChildhoodBedroomInteractions(
         const sh = 304 / s;
         ctx.drawImage(img, (img.width - sw) * 0.5, (img.height - sh) * 0.5, sw, sh, 22, 20, 468, 304);
       } else {
-        ctx.fillStyle = '#312A22';
+        ctx.fillStyle = '#2B231C';
         ctx.fillRect(22, 20, 468, 304);
+        ctx.strokeStyle = '#C9A66B';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(34, 32, 444, 280);
+        // Play triangle icon in center
+        ctx.fillStyle = 'rgba(201, 166, 107, 0.85)';
+        ctx.beginPath();
+        ctx.arc(256, 172, 36, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1E1A16';
+        ctx.beginPath();
+        ctx.moveTo(246, 156);
+        ctx.lineTo(274, 172);
+        ctx.lineTo(246, 188);
+        ctx.closePath();
+        ctx.fill();
         if (src) {
           loadImageIntoCanvas(src, (loaded) => {
             if (isDisposed) return;
@@ -2863,9 +2893,16 @@ export function attachChildhoodBedroomInteractions(
           });
         }
       }
+      // Subtle VIDEO badge
+      ctx.fillStyle = 'rgba(201, 166, 107, 0.92)';
+      ctx.fillRect(34, 32, 118, 24);
+      ctx.fillStyle = '#27231F';
+      ctx.font = '700 12px monospace';
+      ctx.fillText(`VIDEO ${safeIdx + 1}/${videoMemories.length}`, 44, 48);
+
       ctx.fillStyle = '#FFF2D6';
       ctx.font = '700 17px Georgia, serif';
-      ctx.fillText((mem.title || 'Projected Slide').slice(0, 38), 26, 354);
+      ctx.fillText((mem.title || 'Projected Video').slice(0, 36), 26, 354);
       const dateMeta = getAuthenticMemoryDateLabel(mem);
       if (dateMeta.label) {
         ctx.fillStyle = '#D4B07A';
@@ -2878,25 +2915,26 @@ export function attachChildhoodBedroomInteractions(
     projScreenMat.emissiveIntensity = 0.72;
     projTex.needsUpdate = true;
   };
+  projBeamMesh.visible = projectorOn;
   renderProjectorSlide();
 
   registerInteractiveHitbox(
     projectorRoot,
     'memory_projector',
     'bedroom',
-    'Vintage Memory Projector',
-    'Press [E] or click to switch on the slide projector & cycle uploaded photos',
+    'Memory Video Projector',
+    'Press [E] or click to watch your uploaded videos on the projector',
     [1.1, 1.35, 0.72],
     [0.2, 0.68, 0],
-    photoMemories[0],
+    videoMemories[0],
   );
 
   zones.push({
     objectId: 'memory_projector',
     spaceId: 'bedroom',
-    title: 'Vintage Memory Projector',
-    promptVerb: 'Use memory projector',
-    subtitle: 'Project uploaded photographs onto the bedroom screen',
+    title: 'Memory Video Projector',
+    promptVerb: 'Open video projector',
+    subtitle: 'Select and play uploaded videos (MP4, MOV, WEBM)',
     radius: 2.05,
     anchor: projectorRoot,
     getFocusCamera: () => ({
@@ -3131,8 +3169,11 @@ export function attachChildhoodBedroomInteractions(
 
   const getProjectorStateSnapshot = (): BedroomProjectorState => ({
     poweredOn: projectorOn,
-    slideIndex: projectorSlideIndex,
-    photoMemories,
+    slideIndex:
+      videoMemories.length > 0
+        ? Math.max(0, Math.min(projectorSlideIndex, videoMemories.length - 1))
+        : 0,
+    videoMemories,
   });
 
   const getVerifiedTimelineMemories = () => {
@@ -3544,9 +3585,22 @@ export function attachChildhoodBedroomInteractions(
     },
 
     stepProjectorSlide(dir) {
-      if (photoMemories.length > 0) {
+      if (videoMemories.length > 0) {
         projectorSlideIndex =
-          (projectorSlideIndex + dir + photoMemories.length) % photoMemories.length;
+          (projectorSlideIndex + dir + videoMemories.length) % videoMemories.length;
+        projectorOn = true;
+        projBeamMesh.visible = true;
+        renderProjectorSlide();
+        bedroomSfx.play('projector_click');
+      }
+      return getProjectorStateSnapshot();
+    },
+
+    selectProjectorIndex(index) {
+      if (videoMemories.length > 0) {
+        projectorSlideIndex = Math.max(0, Math.min(index, videoMemories.length - 1));
+        projectorOn = true;
+        projBeamMesh.visible = true;
         renderProjectorSlide();
         bedroomSfx.play('projector_click');
       }
@@ -3563,8 +3617,9 @@ export function attachChildhoodBedroomInteractions(
       switch (objectId) {
         case 'under_bed_scrapbook':
         case 'cork_pinboard':
-        case 'memory_projector':
           return photoMemories;
+        case 'memory_projector':
+          return videoMemories;
         case 'bedside_drawer':
           return effectiveDrawerKeepsakes;
         case 'trophy_shelf':

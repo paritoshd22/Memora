@@ -79,9 +79,56 @@
       "isGuest": true,
       "createdAt": "2026-11-27T07:49:43.129Z",
       "updatedAt": "2026-11-27T07:49:43.129Z"
+    },
+    "guest_cd91d7d07c3a1810": {
+      "id": "guest_cd91d7d07c3a1810",
+      "displayName": "Guest Curator",
+      "email": "guest_cd91d7d07c3a1810@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T08:59:28.717Z",
+      "updatedAt": "2026-11-27T08:59:28.717Z"
+    },
+    "guest_57dd7894ce853535": {
+      "id": "guest_57dd7894ce853535",
+      "displayName": "Guest Curator",
+      "email": "guest_57dd7894ce853535@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T08:59:28.718Z",
+      "updatedAt": "2026-11-27T08:59:28.718Z"
+    },
+    "guest_42e008a5586d50d9": {
+      "id": "guest_42e008a5586d50d9",
+      "displayName": "Guest Curator",
+      "email": "guest_42e008a5586d50d9@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T09:00:41.534Z",
+      "updatedAt": "2026-11-27T09:00:41.534Z"
+    },
+    "guest_51b20002ae66322b": {
+      "id": "guest_51b20002ae66322b",
+      "displayName": "Guest Curator",
+      "email": "guest_51b20002ae66322b@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T09:04:42.024Z",
+      "updatedAt": "2026-11-27T09:04:42.024Z"
+    },
+    "guest_6336030bd04ab6a2": {
+      "id": "guest_6336030bd04ab6a2",
+      "displayName": "Guest Curator",
+      "email": "guest_6336030bd04ab6a2@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T09:04:42.025Z",
+      "updatedAt": "2026-11-27T09:04:42.025Z"
     }
   },
-  "sessions": {},
+  "sessions": {
+    "7e5236018f7aa9cb18f0120537503cb389fcd6733d45cbca8d46d35f21c40ac0": {
+      "tokenHash": "7e5236018f7aa9cb18f0120537503cb389fcd6733d45cbca8d46d35f21c40ac0",
+      "userId": "guest_42e008a5586d50d9",
+      "createdAt": "2026-11-27T09:00:41.535Z",
+      "expiresAt": 1798362041535
+    }
+  },
   "revokedTokenHashes": [
     "33a4535de848cba735710b9b8ca8b2bd5fb39c9f8b2fc2c820f7514e4b7a3138",
     "402d2c59b7ed841e747bd1a22500ba1c979b665108d8dc9cfd3e26604dccdf6c",
@@ -92,6 +139,10 @@
     "d293f8da053eee4d35397b6f4ef021c0beb3c4ac394d666b9aaadd940f821dc9",
     "0ef82c0abb87187c10524fe0726f6cb7b3b91b72b95eb9b7d158dda66e9d4b59",
     "49f904b79698f59b6bff64cf360e2b43188d8679c79847ff96d1e4d332e96ff1",
-    "30667ad0f2f598cb5ba4af6ff0d98c66da0bab32ac92603b413aae6b0015c833"
+    "30667ad0f2f598cb5ba4af6ff0d98c66da0bab32ac92603b413aae6b0015c833",
+    "4f2be468d07c9e33884214cb9f522290f92be6b6a11d46fcd8be956f08239bdf",
+    "d5dcbe4ec425c1ceda6722ac6f83204d478bd66fc24388d3b24991a52f65dc80",
+    "b03cc75150c147916a4b751af8bc22f6a7bf9904d999abc4599c46ee56d0e7a8",
+    "8fe52030dccdff2295c9eda5d4e47dd18f8d88717e6bc14e72d9cd4c12dcddd9"
   ]
 }

@@ -40,6 +40,7 @@ import {
   Tv,
   Flower2,
   MessageSquare,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
   CharacterState,
@@ -178,6 +179,7 @@ interface AtriumScene3DProps {
   onUpdateCharacterState: (next: CharacterState) => void;
   onSelectRoom: (roomId: string | null) => void;
   onSelectMemory: (memory: Memory) => void;
+  onDeleteMemory?: (memoryId: string) => void;
   onOpenCreateRoomInSlot: (
     floorId: string,
     slotIndex: 0 | 1 | 2 | 3,
@@ -586,6 +588,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   onUpdateCharacterState,
   onSelectRoom,
   onSelectMemory,
+  onDeleteMemory,
   onOpenCreateRoomInSlot,
   onSmartAddRoom,
   onSelectWallFeature,
@@ -9485,6 +9488,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     }
     if (rebuildSceneRef.current) {
       rebuildSceneRef.current();
+      setBedroomOverlayRevision((r) => r + 1);
     }
   }, [sceneStructureSignature]);
 
@@ -10438,6 +10442,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             onClose={() => exitBedroomInteractionRef.current?.()}
             onSwitchInteraction={(oid) => enterBedroomInteractionRef.current?.(oid)}
             onSelectMemory={(mem) => onSelectMemory(mem)}
+            onDeleteMemory={onDeleteMemory}
+            onOpenAddMemory={
+              onOpenAddMemory ? () => onOpenAddMemory(activeRoomObj.id) : undefined
+            }
             onTriggerPageTurnHandAnim={() => {
               pageTurnHandAnimTimerRef.current = 0.55;
             }}
@@ -10483,11 +10491,69 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         !isAnyModalOpen &&
         !walkthroughActive && (
           <>
-            {/* Quick Contextual Park Experiences Bar (compact top-left inside Childhood Room/Park) */}
+            {/* Quick Room Media Stations & Park Experiences Bar (compact top-left inside Childhood Room) */}
             <div
               data-ui-interactive="true"
-              className="fixed top-3.5 left-3.5 sm:left-5 z-20 flex flex-wrap items-center gap-1 pointer-events-auto"
+              className="fixed top-3.5 left-3.5 sm:left-5 z-20 flex flex-wrap items-center gap-1.5 max-w-[calc(100vw-8rem)] pointer-events-auto"
             >
+              {onOpenAddMemory && (
+                <button
+                  type="button"
+                  onClick={() => onOpenAddMemory(activeRoomObj.id)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold shadow-sm transition-all cursor-pointer bg-[#854D27] hover:bg-[#6E3E1F] text-[#FFFCF6] border-[#D6A15D]/60"
+                >
+                  <Plus className="w-3.5 h-3.5 text-[#FFE2B5]" />
+                  <span>Add Memory</span>
+                </button>
+              )}
+
+              {activeRoomObj.id === 'childhood' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => enterBedroomInteractionRef.current?.('wardrobe')}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
+                      activeBedroomInteraction === 'wardrobe'
+                        ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
+                        : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'
+                    }`}
+                  >
+                    <ImageIcon className="w-3 h-3" />
+                    <span>Cupboard Photos</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      enterBedroomInteractionRef.current?.('memory_projector')
+                    }
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
+                      activeBedroomInteraction === 'memory_projector'
+                        ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
+                        : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'
+                    }`}
+                  >
+                    <Film className="w-3 h-3" />
+                    <span>Projector</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      enterBedroomInteractionRef.current?.('memory_radio')
+                    }
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
+                      activeBedroomInteraction === 'memory_radio'
+                        ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
+                        : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'
+                    }`}
+                  >
+                    <Radio className="w-3 h-3" />
+                    <span>Radio</span>
+                  </button>
+                </>
+              )}
+
               <button
                 type="button"
                 onClick={() =>
@@ -10495,7 +10561,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     ? handleStopBicycleRide()
                     : handleOpenStationExperience('bicycle')
                 }
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
                   bicycleRideActive || activeContextualStation === 'bicycle'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
                     : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'
@@ -10512,7 +10578,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                     prev === 'treehouse' ? null : 'treehouse',
                   )
                 }
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
                   activeContextualStation === 'treehouse' ||
                   activeSpaceId === 'treehouse'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
@@ -10527,44 +10593,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                 type="button"
                 onClick={() =>
                   setActiveContextualStation((prev) =>
-                    prev === 'cinema' ? null : 'cinema',
-                  )
-                }
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
-                  activeContextualStation === 'cinema'
-                    ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'
-                }`}
-              >
-                <Tv className="w-3 h-3" />
-                <span>Outdoor Cinema</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setActiveContextualStation((prev) =>
-                    prev === 'radio' ? null : 'radio',
-                  )
-                }
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
-                  activeContextualStation === 'radio'
-                    ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
-                    : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'
-                }`}
-              >
-                <Radio className="w-3 h-3" />
-                <span>Memory Radio</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setActiveContextualStation((prev) =>
                     prev === 'garden' ? null : 'garden',
                   )
                 }
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer ${
                   activeContextualStation === 'garden'
                     ? 'bg-[#C9A66B] text-[#27231F] border-[#FFE2B5]'
                     : 'bg-[#27231F]/88 hover:bg-[#27231F] text-[#FFFCF6] border-[#C9A66B]/35'

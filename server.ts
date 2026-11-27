@@ -169,7 +169,7 @@ async function forwardRecordsToSupabase(
 export async function createServer() {
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '12mb' }));
+  app.use(express.json({ limit: '50mb' }));
   app.use(
     (
       err: any,
@@ -185,7 +185,7 @@ export async function createServer() {
           httpStatus: 413,
           retryable: false,
           message:
-            'Uploaded file payload exceeds the 12 MB server request limit. Please use a smaller file or lower-resolution copy.',
+            'Uploaded file payload exceeds the 35 MB server upload limit. Please use a smaller photo, video, or audio file.',
         });
         return;
       }

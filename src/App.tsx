@@ -7,7 +7,20 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { HelpCircle, Music, Settings, User, Volume2, VolumeX, X } from 'lucide-react';
+import {
+  Compass,
+  Film,
+  HelpCircle,
+  Image as ImageIcon,
+  Music,
+  Radio,
+  Settings,
+  Upload,
+  User,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react';
 import {
   ActiveNavTab,
   ArtworkMotif,
@@ -1221,6 +1234,7 @@ export default function App() {
     string | null
   >(null);
   const [isAddMemoryOpen, setIsAddMemoryOpen] = useState(false);
+  const [showRoomEntryUploadPopup, setShowRoomEntryUploadPopup] = useState(false);
   const [addMemoryDefaultRoomId, setAddMemoryDefaultRoomId] = useState<
     string | null
   >(null);
@@ -1601,7 +1615,7 @@ export default function App() {
   }, [scopedKeys.CHILDHOOD_ACTIVATED]);
 
   const handleEnterRoom = useCallback(
-    (roomId: string) => {
+    (roomId: string, options?: { skipEntryUploadPopup?: boolean }) => {
       const targetId = rooms.some((r) => r.id === roomId) ? roomId : 'childhood';
       const targetRoom = rooms.find((r) => r.id === targetId);
       if (!targetRoom) return;
@@ -1649,6 +1663,11 @@ export default function App() {
       setActiveNotification(null);
       setNewlyCreatedRoom(null);
 
+      // Show welcoming upload popup once on Childhood Room entry (never repeatedly during the same visit)
+      setShowRoomEntryUploadPopup(
+        targetId === 'childhood' && !options?.skipEntryUploadPopup,
+      );
+
       // Set activeRoomId immediately so AtriumScene3D mounts the 3D room on the very first frame
       // and never re-triggers doorway detection in a 60fps loop.
       setActiveRoomId(targetId);
@@ -1672,10 +1691,22 @@ export default function App() {
       roomEntryHideTimerRef.current = null;
     }
     setRoomEntryTransition(false);
+    setShowRoomEntryUploadPopup(false);
     setIsRoomCatalogueOpen(false);
     setActiveRoomId(null);
     setActiveNav('home');
   }, []);
+
+  useEffect(() => {
+    if (!showRoomEntryUploadPopup) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowRoomEntryUploadPopup(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showRoomEntryUploadPopup]);
 
   const handleToggleFavorite = (memoryId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -1952,9 +1983,134 @@ export default function App() {
         );
       });
     if (stampedMemories.length === 1) {
-      handleEnterRoom(stampedMemories[0].roomId);
+      handleEnterRoom(stampedMemories[0].roomId, { skipEntryUploadPopup: true });
     }
   };
+
+  const handleDirectUploadMemories = useCallback(
+    async (
+      newMemories: Memory[],
+    ): Promise<{
+      ok: boolean;
+      savedMemories: Memory[];
+      errorMessage?: string;
+    }> => {
+      if (newMemories.length === 0) {
+        return { ok: true, savedMemories: [] };
+      }
+
+      const nowIso = new Date().toISOString();
+      const stampedMemories = newMemories.map(
+        (mem) =>
+          ({
+            ...mem,
+            ownerId: mem.ownerId || currentUser?.id,
+            hiddenFrom3D: false,
+            updatedAt: nowIso,
+          }) as Memory,
+      );
+
+      // Add immediately so the 3D Cupboard, Projector, and Radio update right away
+      setMemories((prev) => {
+        const existingIds = new Set(stampedMemories.map((m) => m.id));
+        return [
+          ...stampedMemories,
+          ...prev.filter((m) => !existingIds.has(m.id)),
+        ];
+      });
+
+      const results = await Promise.all(
+        stampedMemories.map((mem) =>
+          syncMemoryRecordToVault(
+            mem as unknown as { id: string; [key: string]: unknown },
+            currentUser?.id,
+            sessionToken,
+          ),
+        ),
+      );
+
+      const failedResult = results.find((r) => !r.ok || !r.synced);
+      if (failedResult && currentUser?.id && sessionToken) {
+        // Roll back rejected records if the server rejected the upload (e.g. unsupported format or too large)
+        const rejectedIds = new Set(
+          stampedMemories
+            .filter((_, idx) => !results[idx]?.ok || !results[idx]?.synced)
+            .map((m) => m.id),
+        );
+        if (rejectedIds.size > 0) {
+          setMemories((prev) => prev.filter((m) => !rejectedIds.has(m.id)));
+        }
+        return {
+          ok: false,
+          savedMemories: [],
+          errorMessage:
+            failedResult.errorMessage ||
+            'Could not save uploaded files to the server vault. Please retry.',
+        };
+      }
+
+      // Adopt durable server URLs (/api/storage/media/<id>) while keeping video poster thumbnails
+      const serverMap = new Map<string, Record<string, unknown>>();
+      results.forEach((r) => {
+        if (r.savedMemory && typeof r.savedMemory.id === 'string') {
+          serverMap.set(r.savedMemory.id, r.savedMemory);
+        }
+      });
+
+      const finalizedMemories = stampedMemories.map((m) => {
+        const srv = serverMap.get(m.id);
+        if (!srv) return m;
+        return {
+          ...m,
+          mediaUrl:
+            typeof srv.mediaUrl === 'string' ? srv.mediaUrl : m.mediaUrl,
+          customImageUrl:
+            typeof srv.customImageUrl === 'string'
+              ? srv.customImageUrl
+              : m.customImageUrl,
+        };
+      });
+
+      if (serverMap.size > 0) {
+        setMemories((prev) =>
+          prev.map((m) => {
+            const updated = finalizedMemories.find((f) => f.id === m.id);
+            return updated || m;
+          }),
+        );
+      }
+
+      const childhoodAdded = finalizedMemories.find(
+        (m) => m.roomId === 'childhood',
+      );
+      if (childhoodAdded) {
+        setLastAddedChildhoodMemory(childhoodAdded);
+      }
+
+      const destinations = Array.from(
+        new Set(
+          finalizedMemories.map((m) => {
+            const t = m.mediaType || m.type;
+            if (t === 'audio') return 'Radio';
+            if (t === 'video') return 'Projector';
+            return 'Cupboard & Photo Display';
+          }),
+        ),
+      ).join(', ');
+
+      emitNotification(
+        `direct-upload-${Date.now()}`,
+        finalizedMemories.length === 1
+          ? `Placed in ${destinations}`
+          : `${finalizedMemories.length} memories placed in room`,
+        `Saved permanently in ${destinations}.`,
+        'important',
+      );
+
+      return { ok: true, savedMemories: finalizedMemories };
+    },
+    [currentUser?.id, sessionToken, emitNotification],
+  );
 
   const handleStartAutoCuration = (
     items: CurationBatchItemInput[],
@@ -3026,6 +3182,7 @@ export default function App() {
     isFeatureWallModalOpen ||
     Boolean(selectedMemoryId) ||
     isAddMemoryOpen ||
+    showRoomEntryUploadPopup ||
     isRoomEditorOpen ||
     isFloorExpansionOpen ||
     isResetConfirmOpen ||
@@ -3073,6 +3230,7 @@ export default function App() {
           onUpdateCharacterState={setCharacterState}
           onSelectRoom={handleSelectRoomFrom3D}
           onSelectMemory={handleSelectMemoryFrom3D}
+          onDeleteMemory={handleDeleteMemory}
           onOpenCreateRoomInSlot={handleOpenCreateRoomInSlot}
           onSmartAddRoom={handleSmartAddRoom}
           onSelectWallFeature={handleOpenWallFeature}
@@ -3687,8 +3845,10 @@ export default function App() {
             onClose={() => setIsAddMemoryOpen(false)}
             rooms={rooms}
             defaultRoomId={addMemoryDefaultRoomId}
+            ownerId={currentUser?.id}
             existingMemories={memories}
             onAddMemories={handleAddMemories}
+            onDirectUploadMemories={handleDirectUploadMemories}
             onStartAutoCuration={handleStartAutoCuration}
           />
         )}
@@ -3727,6 +3887,109 @@ export default function App() {
         )}
       </Suspense>
 
+      {/* Welcoming Upload Popup on Childhood Room Entry (shown once per visit) */}
+      {activeRoomId === 'childhood' &&
+        showRoomEntryUploadPopup &&
+        !roomEntryTransition &&
+        !isAddMemoryOpen && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="room-entry-upload-title"
+            className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-[#18110B]/65 backdrop-blur-sm museum-fade-in"
+          >
+            <div className="w-full max-w-md rounded-2xl bg-[#FFFCF6] border border-[#D8C5A6] shadow-2xl overflow-hidden text-[#27231F] museum-panel-enter">
+              <div className="px-6 pt-5 pb-4 border-b border-[#EFE6D5] bg-[#FAF4E8] flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-[#854D27]">
+                    Childhood Room
+                  </p>
+                  <h2
+                    id="room-entry-upload-title"
+                    className="font-serif-display text-2xl font-semibold text-[#27231F] mt-1 leading-snug"
+                  >
+                    Bring your memories into this room.
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRoomEntryUploadPopup(false)}
+                  aria-label="Explore room without uploading right now"
+                  className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-[#6E5641] hover:bg-[#EFE6D5] cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-[#493629] leading-relaxed">
+                  Add your photos, videos, or music and we will place each one right where it belongs inside the room:
+                </p>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3 rounded-xl bg-[#FAF4E8] border border-[#E8DED0] px-3.5 py-2.5">
+                    <ImageIcon className="w-4 h-4 text-[#854D27] shrink-0" />
+                    <div className="text-xs">
+                      <span className="font-semibold text-[#27231F]">Photos</span>
+                      <span className="text-[#6E5641]">
+                        {' '}
+                        (JPG, PNG, WEBP) → Cupboard &amp; Photo Display
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-xl bg-[#FAF4E8] border border-[#E8DED0] px-3.5 py-2.5">
+                    <Film className="w-4 h-4 text-[#854D27] shrink-0" />
+                    <div className="text-xs">
+                      <span className="font-semibold text-[#27231F]">Videos</span>
+                      <span className="text-[#6E5641]">
+                        {' '}
+                        (MP4, MOV, WEBM) → Projector
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-xl bg-[#FAF4E8] border border-[#E8DED0] px-3.5 py-2.5">
+                    <Radio className="w-4 h-4 text-[#854D27] shrink-0" />
+                    <div className="text-xs">
+                      <span className="font-semibold text-[#27231F]">Music</span>
+                      <span className="text-[#6E5641]">
+                        {' '}
+                        (MP3, WAV, M4A, OGG) → Radio
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRoomEntryUploadPopup(false);
+                      setAddMemoryDefaultRoomId('childhood');
+                      setIsAddMemoryOpen(true);
+                    }}
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] rounded-xl bg-[#27231F] hover:bg-[#3C2E24] text-[#FFFCF6] text-sm font-semibold shadow-md cursor-pointer transition-colors"
+                  >
+                    <Upload className="w-4 h-4 text-[#D6A15D]" />
+                    Upload Memories
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowRoomEntryUploadPopup(false)}
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] rounded-xl bg-[#F6F1E8] hover:bg-[#EFE6D5] border border-[#D8C5A6] text-[#27231F] text-sm font-semibold cursor-pointer transition-colors"
+                  >
+                    <Compass className="w-4 h-4 text-[#854D27]" />
+                    Explore Room
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-center text-[#6E5641]">
+                  You can reopen uploads anytime using the Add Memory button inside the room.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
       <CurationStatusHUD
         batchState={curationBatchState}
         onDismiss={() => {
@@ -3756,6 +4019,7 @@ export default function App() {
           hasEnteredAtrium &&
           activeNav === 'home' &&
           !isAddMemoryOpen &&
+          !showRoomEntryUploadPopup &&
           !isFeatureWallModalOpen
         }
         childhoodMemories={memories.filter((m) => m.roomId === 'childhood')}
@@ -3768,6 +4032,7 @@ export default function App() {
         userId={currentUser?.id}
         sessionToken={sessionToken}
         onStartQuickUpload={(items) => handleStartAutoCuration(items)}
+        onDirectUploadMemories={handleDirectUploadMemories}
         onOpenFullUploadModal={() => {
           setAddMemoryDefaultRoomId('childhood');
           setIsAddMemoryOpen(true);

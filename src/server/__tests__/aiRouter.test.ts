@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   AIProviderAdapter,
   GeminiProviderAdapter,
@@ -6,7 +9,12 @@ import {
   parseAndValidateJson,
 } from '../aiProviders';
 import { AIRouter } from '../aiRouter';
+import { MemoryVaultService } from '../memoryVaultService';
 import { AITaskRequest } from '../../types/aiStudio';
+import {
+  resolveAutomaticRoomPlacement,
+  validateUploadFileCandidate,
+} from '../../utils/clientMediaExtractor';
 
 async function runTests() {
   console.log('Running MEMORA AI Provider & Task Router Test Suite...\n');
@@ -736,9 +744,9 @@ async function runTests() {
       {
         id: 'mem-beta-1',
         roomId: 'childhood',
-        title: 'Beta Secret Story',
-        type: 'story',
-        mediaMimeType: 'text/plain',
+        title: 'Beta Secret Song',
+        type: 'audio',
+        mediaMimeType: 'audio/mpeg',
       },
     ]);
     assert.equal(resBeta.ok, true);
@@ -1559,22 +1567,29 @@ async function runTests() {
     assert.equal(badZipRes.httpStatus, 400);
     assert.equal(modelCalls, 0);
 
-    const textRes = await svc.analyzeItem({
-      fileName: 'bike-note.txt',
-      mimeType: 'text/plain',
-      sourceType: 'text',
-      extractedText: 'I rode my red bicycle down the quiet street after school.',
+    const badPdfRes = await svc.analyzeItem({
+      fileName: 'notes.pdf',
+      mimeType: 'application/pdf',
     });
-    assert.equal(textRes.ok, true);
-    assert.equal(textRes.modelUsed, 'gemini-3.1-flash-lite');
-    assert.equal(textRes.report?.modelUsed, 'gemini-3.1-flash-lite');
-    assert.equal(textRes.report?.mediaCategory, 'story');
-    assert.equal(textRes.report?.autoPlacedIn3D, false);
-    assert.deepEqual(textRes.suggestedThemes, ['childhood cycling', 'summer afternoons']);
-    assert.equal(textRes.suggestedDate, '');
-    assert.equal(textRes.suggestedLocation, '');
+    assert.equal(badPdfRes.ok, false);
+    assert.equal(badPdfRes.code, 'INVALID_INPUT');
+    assert.equal(badPdfRes.httpStatus, 400);
+
+    const photoRes = await svc.analyzeItem({
+      fileName: 'red-bike.jpg',
+      mimeType: 'image/jpeg',
+      sourceType: 'image',
+      extractedText: 'Red bicycle parked outside after school.',
+    });
+    assert.equal(photoRes.ok, true);
+    assert.equal(photoRes.modelUsed, 'gemini-3.1-flash-lite');
+    assert.equal(photoRes.report?.modelUsed, 'gemini-3.1-flash-lite');
+    assert.equal(photoRes.report?.autoPlacedIn3D, false);
+    assert.deepEqual(photoRes.suggestedThemes, ['childhood cycling', 'summer afternoons']);
+    assert.equal(photoRes.suggestedDate, '');
+    assert.equal(photoRes.suggestedLocation, '');
     assert.ok(
-      (textRes.report?.uncertainInfo || []).some((u) => /date|year/i.test(u)),
+      (photoRes.report?.uncertainInfo || []).some((u) => /date|year/i.test(u)),
       'Unknown date should be explicitly noted in uncertainInfo',
     );
 
@@ -1583,40 +1598,40 @@ async function runTests() {
       id: 'mem-review-1',
       ownerId: 'user-1',
       roomId: 'childhood',
-      title: 'Sunny Bicycle Note',
-      subtitle: 'Bookshelf',
-      type: 'story',
-      mediaType: 'story',
-      mediaFileName: 'bike-note.txt',
+      title: 'Sunny Bicycle Photo',
+      subtitle: 'Cupboard & Photo Display',
+      type: 'image',
+      mediaType: 'image',
+      mediaFileName: 'red-bike.jpg',
       date: '',
       year: 2026,
       location: '',
       people: [],
       emotionTags: ['Preserved Archive'],
-      category: 'Story',
-      description: 'A short written note describing a red bicycle ride after school.',
+      category: 'Photo',
+      description: 'A red bicycle parked outside after school.',
       story: 'I rode my red bicycle down the quiet street after school.',
       accessionNumber: 'ACC.2026.REV1',
       motif: 'treehouse_meadow',
       palette: ['#F4D8AF'],
       tags: ['childhood cycling'],
-      aiSummary: 'Written reflections belong on the Bookshelf.',
-      assistantNote: 'Fits on Bookshelf.',
-      curatedZoneId: 'bookshelf',
+      aiSummary: 'Fits in Cupboard & Photo Display.',
+      assistantNote: 'Fits in Cupboard & Photo Display.',
+      curatedZoneId: 'memory_wall',
       hiddenFrom3D: true,
       userProvided: {
         title: 'My Red Bike',
-        description: 'Note from my notebook.',
+        description: 'Photo from my childhood street.',
         date: '1998',
       },
       aiSuggestions: {
-        title: 'Sunny Bicycle Note',
+        title: 'Sunny Bicycle Photo',
         description: 'AI description',
         tags: ['childhood cycling'],
-        locationId: 'bookshelf',
+        locationId: 'memory_wall',
         modelUsed: 'gemini-3.1-flash-lite',
       },
-      curationReport: textRes.report,
+      curationReport: photoRes.report,
     };
 
     const approvedMem = buildFinalMemoryFromReview({
@@ -1646,18 +1661,170 @@ async function runTests() {
     });
     assert.equal(rejectedAiMem.hiddenFrom3D, false);
     assert.equal(rejectedAiMem.title, 'My Red Bike');
-    assert.equal(rejectedAiMem.description, 'Note from my notebook.');
+    assert.equal(rejectedAiMem.description, 'Photo from my childhood street.');
     assert.equal(rejectedAiMem.date, '1998');
     assert.equal(rejectedAiMem.confirmationStatus, 'manual_no_ai');
     assert.equal(rejectedAiMem.aiSuggestions, undefined);
     assert.equal(rejectedAiMem.curationReport, undefined);
-    assert.equal(rejectedAiMem.mediaFileName, 'bike-note.txt');
+    assert.equal(rejectedAiMem.mediaFileName, 'red-bike.jpg');
 
     console.log('✅ Test 22 Passed: Unsupported/oversized upload rejection, AQ.*/Bearer secret redaction, fallback model tracking, unknown-field transparency, and review/edit/reject-before-save.');
     passed++;
   }
 
-  console.log(`\n🎉 All ${passed}/22 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
+  // -------------------------------------------------------------------------
+  // Test 23: Strict Photo/Video/Music Allowlist, PDF/Doc/Chat Rejection,
+  // Automatic Room Placement (Radio, Projector, Cupboard), & Video/Audio Disk Persistence
+  // -------------------------------------------------------------------------
+  {
+    // 23a. Client validator accepts ONLY supported photo, video, and music extensions
+    const allowedSamples: Array<{
+      name: string;
+      type: string;
+      expected: 'image' | 'video' | 'audio';
+    }> = [
+      { name: 'family.jpg', type: 'image/jpeg', expected: 'image' },
+      { name: 'picnic.jpeg', type: 'image/jpeg', expected: 'image' },
+      { name: 'drawing.png', type: 'image/png', expected: 'image' },
+      { name: 'garden.webp', type: 'image/webp', expected: 'image' },
+      { name: 'birthday.mp4', type: 'video/mp4', expected: 'video' },
+      { name: 'vacation.mov', type: 'video/quicktime', expected: 'video' },
+      { name: 'clip.webm', type: 'video/webm', expected: 'video' },
+      { name: 'lullaby.mp3', type: 'audio/mpeg', expected: 'audio' },
+      { name: 'piano.wav', type: 'audio/wav', expected: 'audio' },
+      { name: 'song.m4a', type: 'audio/mp4', expected: 'audio' },
+      { name: 'melody.ogg', type: 'audio/ogg', expected: 'audio' },
+    ];
+    for (const sample of allowedSamples) {
+      const check = validateUploadFileCandidate({
+        name: sample.name,
+        type: sample.type,
+        size: 1024,
+      });
+      assert.equal(check.valid, true, `Expected ${sample.name} to be accepted`);
+      assert.equal(check.detectedMediaType, sample.expected);
+    }
+
+    // 23b. Client validator strictly rejects PDFs, documents, and chat files
+    const rejectedSamples = [
+      { name: 'report.pdf', type: 'application/pdf' },
+      { name: 'whatsapp-chat.txt', type: 'text/plain' },
+      { name: 'messages.json', type: 'application/json' },
+      { name: 'letter.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+      { name: 'chat-export.chat', type: '' },
+      { name: 'animated.gif', type: 'image/gif' },
+    ];
+    for (const bad of rejectedSamples) {
+      const check = validateUploadFileCandidate({
+        name: bad.name,
+        type: bad.type,
+        size: 1024,
+      });
+      assert.equal(check.valid, false, `Expected ${bad.name} to be rejected`);
+      assert.equal(check.code, 'UNSUPPORTED_FORMAT');
+      assert.ok(
+        check.reason && /JPG|MP4|MP3/i.test(check.reason),
+        'Rejection message should explain supported formats',
+      );
+    }
+
+    // 23c. Automatic placement routes Music -> Radio, Video -> Projector, Photo -> Cupboard & Photo Display
+    const radioPlace = resolveAutomaticRoomPlacement('audio');
+    assert.equal(radioPlace.linkedObjectId, 'memory_radio');
+    assert.equal(radioPlace.curatedZoneId, 'memory_radio');
+
+    const projectorPlace = resolveAutomaticRoomPlacement('video');
+    assert.equal(projectorPlace.linkedObjectId, 'memory_projector');
+    assert.equal(projectorPlace.curatedZoneId, 'outdoor_cinema');
+
+    const cupboardPlace = resolveAutomaticRoomPlacement('image');
+    assert.equal(cupboardPlace.linkedObjectId, 'wardrobe');
+    assert.equal(cupboardPlace.curatedZoneId, 'memory_wall');
+
+    // 23d. Server MemoryVaultService rejects PDF/document/chat uploads and persists video+poster cleanly
+    const tmpVault23 = path.join(
+      os.tmpdir(),
+      `memora-vault-media-test-${Date.now()}.json`,
+    );
+    const vault23 = new MemoryVaultService(tmpVault23);
+    const pdfSave = vault23.upsertUserMemories('user_media_test', [
+      {
+        id: 'mem-pdf-blocked',
+        roomId: 'childhood',
+        title: 'Blocked PDF',
+        type: 'document',
+        mediaFileName: 'blocked.pdf',
+        mediaMimeType: 'application/pdf',
+      },
+    ]);
+    assert.equal(pdfSave.ok, false);
+    assert.equal(pdfSave.code, 'VALIDATION_FAILED');
+
+    const chatSave = vault23.upsertUserMemories('user_media_test', [
+      {
+        id: 'mem-chat-blocked',
+        roomId: 'childhood',
+        title: 'Blocked Chat',
+        type: 'chat',
+        mediaFileName: 'chat.txt',
+        mediaMimeType: 'text/plain',
+      },
+    ]);
+    assert.equal(chatSave.ok, false);
+
+    // Video with both mediaUrl (video/mp4) and customImageUrl (JPEG poster) must save the MP4 binary, NOT overwrite mediaUrl with the JPEG poster
+    const fakeMp4Base64 = Buffer.from('00000018667479706d703432', 'hex').toString('base64');
+    const fakeJpgBase64 = Buffer.from('ffd8ffe000104a464946', 'hex').toString('base64');
+    const videoSave = vault23.upsertUserMemories('user_media_test', [
+      {
+        id: 'mem-vid-1',
+        roomId: 'childhood',
+        title: 'Summer Clip',
+        type: 'video',
+        mediaType: 'video',
+        mediaFileName: 'summer.mp4',
+        mediaMimeType: 'video/mp4',
+        mediaUrl: `data:video/mp4;base64,${fakeMp4Base64}`,
+        customImageUrl: `data:image/jpeg;base64,${fakeJpgBase64}`,
+      },
+    ]);
+    assert.equal(videoSave.ok, true);
+    const storedVideo = vault23.getUserMemory('user_media_test', 'mem-vid-1');
+    assert.equal(storedVideo?.storedMediaFile?.mimeType, 'video/mp4');
+    assert.equal(storedVideo?.mediaUrl, '/api/storage/media/mem-vid-1');
+    assert.ok(
+      storedVideo?.customImageUrl?.startsWith('data:image/jpeg;base64,'),
+      'Video poster thumbnail should remain preserved alongside durable video URL',
+    );
+
+    const fakeMp3Base64 = Buffer.from('49443303000000000000', 'hex').toString('base64');
+    const audioSave = vault23.upsertUserMemories('user_media_test', [
+      {
+        id: 'mem-aud-1',
+        roomId: 'childhood',
+        title: 'Bedtime Song',
+        type: 'audio',
+        mediaType: 'audio',
+        mediaFileName: 'bedtime.mp3',
+        mediaMimeType: 'audio/mpeg',
+        mediaUrl: `data:audio/mpeg;base64,${fakeMp3Base64}`,
+      },
+    ]);
+    assert.equal(audioSave.ok, true);
+    const storedAudio = vault23.getUserMemory('user_media_test', 'mem-aud-1');
+    assert.equal(storedAudio?.storedMediaFile?.mimeType, 'audio/mpeg');
+    assert.equal(storedAudio?.mediaUrl, '/api/storage/media/mem-aud-1');
+
+    // Clean up temporary test vault and media files
+    vault23.deleteUserMemory('user_media_test', 'mem-vid-1');
+    vault23.deleteUserMemory('user_media_test', 'mem-aud-1');
+    if (fs.existsSync(tmpVault23)) fs.unlinkSync(tmpVault23);
+
+    console.log('✅ Test 23 Passed: Strict Photo/Video/Music allowlist, PDF/Doc/Chat rejection, automatic Radio/Projector/Cupboard placement, and video/audio vault persistence.');
+    passed++;
+  }
+
+  console.log(`\n🎉 All ${passed}/23 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
 }
 
 runTests().catch((err) => {
