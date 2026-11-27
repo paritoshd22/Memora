@@ -19,6 +19,7 @@ import {
   isValidGeminiApiKey,
   redactSecretsFromMessage,
   sanitizeBase64ImageInput,
+  validateMemoryUploadMediaInput,
 } from './geminiConfig';
 
 export interface GeminiContentPart {
@@ -29,12 +30,19 @@ export interface GeminiContentPart {
   };
 }
 
+export type GeminiModelExecutorOutput =
+  | string
+  | {
+      text: string;
+      modelUsed?: string;
+    };
+
 export type GeminiModelExecutor = (params: {
   apiKey: string;
   model: string;
   parts: GeminiContentPart[];
   responseMimeType?: string;
-}) => Promise<string>;
+}) => Promise<GeminiModelExecutorOutput>;
 
 export interface MemoryCurationServiceOptions {
   getApiKey?: () => string | undefined;
@@ -61,6 +69,7 @@ export interface CurationAnalysisResult {
   suggestedDate?: string;
   suggestedLocation?: string;
   suggestedTags?: string[];
+  suggestedThemes?: string[];
   suggestedPeople?: string[];
   assistantResponse?: string;
   aiGeneratedTitle?: string;
@@ -160,7 +169,7 @@ async function defaultGeminiExecutor(params: {
   model: string;
   parts: GeminiContentPart[];
   responseMimeType?: string;
-}): Promise<string> {
+}): Promise<{ text: string; modelUsed: string }> {
   const res = await generateGeminiContentWithResilience({
     apiKey: params.apiKey,
     preferredModel: params.model,
@@ -172,7 +181,7 @@ async function defaultGeminiExecutor(params: {
     maxRetriesPerModel: 1,
     allowModelFallback: true,
   });
-  return res.text;
+  return { text: res.text, modelUsed: res.modelUsed };
 }
 
 export class MemoryCurationService {
@@ -194,14 +203,14 @@ export class MemoryCurationService {
     if (typeof optionsOrGetKey === 'function') {
       this.getApiKey = optionsOrGetKey;
       this.executeModel = defaultGeminiExecutor;
-      this.timeoutMs = 30000;
+      this.timeoutMs = 45000;
     } else {
       this.getApiKey =
         optionsOrGetKey?.getApiKey ?? (() => process.env.GEMINI_API_KEY);
       this.executeModel =
         optionsOrGetKey?.executeModel ?? defaultGeminiExecutor;
       this.onStatusUpdate = optionsOrGetKey?.onStatusUpdate;
-      this.timeoutMs = optionsOrGetKey?.timeoutMs ?? 30000;
+      this.timeoutMs = optionsOrGetKey?.timeoutMs ?? 45000;
     }
     // Do not display 'connected' merely because a key exists; require an API request to succeed.
     this.connectionStatus = this.isConfigured()
@@ -214,12 +223,12 @@ export class MemoryCurationService {
     model: string;
     parts: GeminiContentPart[];
     responseMimeType?: string;
-  }): Promise<string> {
+  }): Promise<{ text: string; modelUsed: string }> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
+      const output = await Promise.race([
         this.executeModel(params),
-        new Promise<string>((_, reject) => {
+        new Promise<GeminiModelExecutorOutput>((_, reject) => {
           timer = setTimeout(() => {
             const timeoutErr: any = new Error(
               `Gemini request timed out after ${Math.round(this.timeoutMs / 1000)}s.`,
@@ -230,6 +239,13 @@ export class MemoryCurationService {
           }, this.timeoutMs);
         }),
       ]);
+      if (typeof output === 'string') {
+        return { text: output, modelUsed: params.model };
+      }
+      return {
+        text: String(output?.text || ''),
+        modelUsed: output?.modelUsed || params.model,
+      };
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -359,8 +375,43 @@ export class MemoryCurationService {
       };
     }
 
+    const mediaValidation = validateMemoryUploadMediaInput({
+      fileName: typeof item.fileName === 'string' ? item.fileName : undefined,
+      mimeType: typeof item.mimeType === 'string' ? item.mimeType : undefined,
+      sizeBytes: typeof item.sizeBytes === 'number' ? item.sizeBytes : undefined,
+      audioBase64:
+        typeof item.audioBase64 === 'string' ? item.audioBase64 : undefined,
+      audioMimeType:
+        typeof item.audioMimeType === 'string' ? item.audioMimeType : undefined,
+      documentBase64:
+        typeof item.documentBase64 === 'string' ? item.documentBase64 : undefined,
+      detectedMediaType:
+        typeof item.detectedMediaType === 'string'
+          ? item.detectedMediaType
+          : undefined,
+      sourceType:
+        typeof item.sourceType === 'string' ? item.sourceType : undefined,
+    });
+    if (!mediaValidation.ok) {
+      return {
+        ok: false,
+        analyzedBy: 'none',
+        isDemo: false,
+        warnings: [
+          mediaValidation.errorMessage || 'Unsupported or oversized memory file.',
+        ],
+        connectionStatus: this.getStatus().connectionStatus,
+        code: mediaValidation.code || 'INVALID_INPUT',
+        httpStatus: mediaValidation.httpStatus || 400,
+        retryable: false,
+        message:
+          mediaValidation.errorMessage ||
+          'The uploaded file type or size is not supported for Gemini analysis.',
+      };
+    }
+
     const rawMediaHint = String(
-      item.detectedMediaType || item.mediaType || '',
+      item.detectedMediaType || item.mediaType || item.sourceType || '',
     )
       .trim()
       .toLowerCase();
@@ -374,16 +425,23 @@ export class MemoryCurationService {
             ? 'certificate'
             : rawMediaHint === 'chat'
               ? 'chat'
-              : rawMediaHint === 'story'
+              : rawMediaHint === 'story' ||
+                  rawMediaHint === 'text' ||
+                  mimeHint.startsWith('text/')
                 ? 'story'
                 : rawMediaHint === 'document' || mimeHint === 'application/pdf'
                   ? 'document'
                   : 'image';
     const fileName = String(item.fileName || 'uploaded_memory').slice(0, 180);
-    const rawTextContent =
+    const rawTextSource =
       typeof item.rawTextContent === 'string'
-        ? item.rawTextContent.slice(0, 12000)
-        : undefined;
+        ? item.rawTextContent
+        : typeof item.extractedText === 'string'
+          ? item.extractedText
+          : undefined;
+    const rawTextContent = rawTextSource
+      ? rawTextSource.slice(0, 12000)
+      : undefined;
 
     // Optional real Gemini audio transcription step for uploaded audio
     let transcriptFromGemini: string | undefined;
@@ -397,7 +455,7 @@ export class MemoryCurationService {
 
     if (audioPayload) {
       try {
-        const transcriptRaw = await this.runModelWithTimeout({
+        const transcriptRes = await this.runModelWithTimeout({
           apiKey,
           model: GEMINI_MODELS.transcribe,
           parts: [
@@ -412,8 +470,8 @@ export class MemoryCurationService {
             },
           ],
         });
-        if (transcriptRaw && transcriptRaw.length > 0) {
-          transcriptFromGemini = transcriptRaw.slice(0, 4000);
+        if (transcriptRes.text && transcriptRes.text.length > 0) {
+          transcriptFromGemini = transcriptRes.text.slice(0, 4000);
         }
       } catch (transcribeErr: unknown) {
         const classified = classifyGeminiError(transcribeErr);
@@ -467,8 +525,8 @@ export class MemoryCurationService {
           isDemo: false,
           warnings: [sanitizedImg.errorMessage || 'Invalid image payload.'],
           connectionStatus: this.getStatus().connectionStatus,
-          code: 'INVALID_INPUT',
-          httpStatus: 400,
+          code: sanitizedImg.code || 'INVALID_INPUT',
+          httpStatus: sanitizedImg.httpStatus || 400,
           retryable: false,
           message:
             sanitizedImg.errorMessage ||
@@ -578,12 +636,15 @@ export class MemoryCurationService {
       : GEMINI_MODELS.curation;
 
     try {
-      const rawResponseText = await this.runModelWithTimeout({
+      const modelRes = await this.runModelWithTimeout({
         apiKey,
         model: targetCurationModel,
         parts,
         responseMimeType: 'application/json',
       });
+
+      const rawResponseText = modelRes.text;
+      const actualModelUsed = modelRes.modelUsed || targetCurationModel;
 
       if (!rawResponseText) {
         const emptyErr: any = new Error(
@@ -597,6 +658,19 @@ export class MemoryCurationService {
         rawResponseText,
         ['suggestedTitle', 'recommendedLocationId'],
       );
+
+      if (
+        typeof parsed.suggestedTitle !== 'string' ||
+        !parsed.suggestedTitle.trim() ||
+        typeof parsed.recommendedLocationId !== 'string' ||
+        !parsed.recommendedLocationId.trim()
+      ) {
+        const badShapeErr: any = new Error(
+          'Gemini response missing valid string suggestedTitle or recommendedLocationId.',
+        );
+        badShapeErr.code = 'INVALID_AI_RESPONSE';
+        throw badShapeErr;
+      }
 
       const warnings: string[] = [];
       const rawConfidence = Number(parsed.confidenceScore);
@@ -639,7 +713,7 @@ export class MemoryCurationService {
 
       const assistantResponse =
         String(parsed.assistantResponse || '').trim().slice(0, 320) ||
-        `Your memory "${cleanTitle}" is ready for the ${placement.catalogEntry.label} in the Childhood Room.`;
+        `Your memory "${cleanTitle}" is ready for your review and suggested for the ${placement.catalogEntry.label} in the Childhood Room.`;
 
       const explicitDates = asCleanStringArray(parsed.explicitDates, 6);
       const suggestedDate =
@@ -651,6 +725,13 @@ export class MemoryCurationService {
         .trim()
         .slice(0, 100);
       const suggestedTags = asCleanStringArray(parsed.suggestedTags, 8);
+      const suggestedTopics = asCleanStringArray(parsed.topics, 8);
+      const suggestedThemes =
+        suggestedTopics.length > 0
+          ? suggestedTopics
+          : suggestedTags.length > 0
+            ? suggestedTags.slice(0, 5)
+            : [mediaCategory];
       const suggestedPeople = asCleanStringArray(parsed.suggestedPeople, 10);
 
       const verifiedFacts = asCleanStringArray(parsed.verifiedFacts, 8);
@@ -658,9 +739,23 @@ export class MemoryCurationService {
         verifiedFacts.push(`Original ${mediaCategory} file "${fileName}" preserved.`);
       }
 
+      const uncertainInfo = asCleanStringArray(parsed.uncertainInfo, 8);
+      if (!suggestedDate && !uncertainInfo.some((u) => /date|year|when/i.test(u))) {
+        uncertainInfo.push('Date / year: unknown (not explicitly shown or provided).');
+      }
+      if (!suggestedLocation && !uncertainInfo.some((u) => /location|place|where/i.test(u))) {
+        uncertainInfo.push('Real-world location: unknown (not explicitly shown or provided).');
+      }
+      if (
+        suggestedPeople.length === 0 &&
+        !uncertainInfo.some((u) => /people|person|who|identit/i.test(u))
+      ) {
+        uncertainInfo.push('People / relationships: unknown (never inferred).');
+      }
+
       const report: MemoryAnalysisReport = {
         analyzedBy: 'gemini',
-        modelUsed: targetCurationModel,
+        modelUsed: actualModelUsed,
         analyzedAt: new Date().toISOString(),
         mediaCategory,
         mainSubject: String(parsed.mainSubject || cleanTitle).trim().slice(0, 140),
@@ -675,7 +770,7 @@ export class MemoryCurationService {
             ? String(parsed.documentType || mediaCategory).slice(0, 60)
             : undefined,
         explicitDates,
-        topics: asCleanStringArray(parsed.topics, 8),
+        topics: suggestedThemes,
         transcript: transcriptFromGemini,
         audioKind:
           parsed.audioKind === 'music' ||
@@ -686,7 +781,7 @@ export class MemoryCurationService {
         parsedChatMessages: parsedChat?.messages,
         verifiedFacts,
         aiInferences: asCleanStringArray(parsed.aiInferences, 8),
-        uncertainInfo: asCleanStringArray(parsed.uncertainInfo, 8),
+        uncertainInfo,
         recommendedRoomId: 'childhood',
         recommendedLocationId: placement.locationId,
         recommendedDisplayObject: placement.catalogEntry.linkedObjectId,
@@ -697,7 +792,7 @@ export class MemoryCurationService {
             placement.catalogEntry.experienceSummary,
         assistantResponse,
         sensitiveReconstructionRequiresApproval: false,
-        autoPlacedIn3D: true,
+        autoPlacedIn3D: false,
       };
 
       this.setStatus('connected');
@@ -705,7 +800,7 @@ export class MemoryCurationService {
       return {
         ok: true,
         analyzedBy: 'gemini',
-        modelUsed: targetCurationModel,
+        modelUsed: actualModelUsed,
         isDemo: false,
         confidenceScore,
         warnings,
@@ -723,6 +818,7 @@ export class MemoryCurationService {
           suggestedTags.length > 0
             ? suggestedTags
             : [mediaCategory, placement.locationId],
+        suggestedThemes,
         suggestedPeople:
           suggestedPeople.length > 0
             ? suggestedPeople
@@ -793,19 +889,19 @@ export class MemoryCurationService {
           'Return ONLY valid JSON: { "collections": [{ "title": string, "subtitle": string, "curatorNote": string, "memoryIds": string[], "suggestedEnvironment": string, "evidenceSummary": string, "confidenceNote": string }] }',
         ].join('\n');
 
-        const raw = await this.executeModel({
+        const rawRes = await this.runModelWithTimeout({
           apiKey,
           model: GEMINI_MODELS.curation,
           parts: [{ text: prompt }],
           responseMimeType: 'application/json',
         });
 
-        if (raw) {
-          const parsed = parseAndValidateJson<{ collections?: any[] }>(raw);
+        if (rawRes.text) {
+          const parsed = parseAndValidateJson<{ collections?: any[] }>(rawRes.text);
           if (Array.isArray(parsed.collections)) {
             proposedCollections = parsed.collections;
             analyzedBy = 'gemini';
-            modelUsed = GEMINI_MODELS.curation;
+            modelUsed = rawRes.modelUsed || GEMINI_MODELS.curation;
             this.setStatus('connected');
           }
         }
@@ -984,12 +1080,14 @@ export class MemoryCurationService {
       .join('\n');
 
     try {
-      const rawText = await this.runModelWithTimeout({
+      const modelRes = await this.runModelWithTimeout({
         apiKey,
         model: GEMINI_MODELS.curation,
         parts: [{ text: prompt }],
         responseMimeType: 'application/json',
       });
+      const rawText = modelRes.text;
+      const actualModelUsed = modelRes.modelUsed || GEMINI_MODELS.curation;
 
       if (!rawText) {
         const emptyErr: any = new Error(
@@ -1082,7 +1180,7 @@ export class MemoryCurationService {
       return {
         ok: true,
         analyzedBy: 'gemini',
-        modelUsed: GEMINI_MODELS.curation,
+        modelUsed: actualModelUsed,
         connectionStatus: 'connected',
         httpStatus: 200,
         reply: reply || 'I reviewed your saved Childhood Room memories.',

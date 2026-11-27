@@ -194,7 +194,9 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   };
 
   const handleStartUploadAndAnalyze = async () => {
-    if (stagedFiles.length === 0 || !onStartAutoCuration) return;
+    if (stagedFiles.length === 0 || !onStartAutoCuration || isPreparingFiles) {
+      return;
+    }
 
     setIsPreparingFiles(true);
     setPrepFeedback(
@@ -246,7 +248,8 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
 
   const handleSubmitWritten = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!writtenText.trim() || !onStartAutoCuration) return;
+    if (!writtenText.trim() || !onStartAutoCuration || isPreparingFiles) return;
+    setIsPreparingFiles(true);
     const item = prepareTextMemoryForAutoCuration({
       text: writtenText,
       titleHint: writtenTitle,
@@ -255,6 +258,7 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
     setWrittenTitle('');
     setWrittenText('');
     onStartAutoCuration([item]);
+    setIsPreparingFiles(false);
     onClose();
   };
 
@@ -292,7 +296,8 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
 
   const handleCapturePhoto = async () => {
     const video = videoPreviewRef.current;
-    if (!video || !onStartAutoCuration) return;
+    if (!video || !onStartAutoCuration || isPreparingFiles) return;
+    setIsPreparingFiles(true);
     try {
       const w = video.videoWidth || 1280;
       const h = video.videoHeight || 720;
@@ -311,6 +316,10 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
     } catch {
       if (isMountedRef.current) {
         setCameraError('Could not capture photo from camera feed. Please try again.');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsPreparingFiles(false);
       }
     }
   };

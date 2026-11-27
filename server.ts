@@ -6,6 +6,7 @@ import { AIRouter } from './src/server/aiRouter';
 import { GeminiProviderAdapter } from './src/server/aiProviders';
 import { AuthService } from './src/server/authService';
 import { MemoryCurationService } from './src/server/memoryCurationService';
+import { redactSecretsFromMessage } from './src/server/geminiConfig';
 import { MemoryVaultService } from './src/server/memoryVaultService';
 import { PlaylistIntegrationService } from './src/server/playlistService';
 import { AIProviderId, AITaskRequest } from './src/types/aiStudio';
@@ -169,6 +170,39 @@ export async function createServer() {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '12mb' }));
+  app.use(
+    (
+      err: any,
+      _req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+        res.status(413).json({
+          ok: false,
+          analyzedBy: 'none',
+          code: 'PAYLOAD_TOO_LARGE',
+          httpStatus: 413,
+          retryable: false,
+          message:
+            'Uploaded file payload exceeds the 12 MB server request limit. Please use a smaller file or lower-resolution copy.',
+        });
+        return;
+      }
+      if (err instanceof SyntaxError && (err as any).status === 400) {
+        res.status(400).json({
+          ok: false,
+          analyzedBy: 'none',
+          code: 'INVALID_INPUT',
+          httpStatus: 400,
+          retryable: false,
+          message: 'Malformed JSON request payload.',
+        });
+        return;
+      }
+      next(err);
+    },
+  );
 
   const authRateLimiter = createSlidingWindowRateLimiter(30, 60_000);
   const storageRateLimiter = createSlidingWindowRateLimiter(90, 60_000);
@@ -374,15 +408,17 @@ export async function createServer() {
           ? 200
           : result.code === 'INVALID_INPUT'
             ? 400
-            : result.code === 'AUTHENTICATION_FAILED'
-              ? 401
-              : result.code === 'CONSENT_REQUIRED'
-                ? 403
-                : result.code === 'RATE_LIMITED'
-                  ? 429
-                  : result.code === 'INVALID_AI_RESPONSE'
-                    ? 502
-                    : 503);
+            : result.code === 'PAYLOAD_TOO_LARGE'
+              ? 413
+              : result.code === 'AUTHENTICATION_FAILED'
+                ? 401
+                : result.code === 'CONSENT_REQUIRED'
+                  ? 403
+                  : result.code === 'RATE_LIMITED'
+                    ? 429
+                    : result.code === 'INVALID_AI_RESPONSE'
+                      ? 502
+                      : 503);
       res.status(status).json(result);
     } catch (err: any) {
       res.status(503).json({
@@ -391,7 +427,7 @@ export async function createServer() {
         connectionStatus: 'provider_unavailable',
         code: 'PROVIDER_UNAVAILABLE',
         retryable: true,
-        message: `Curation analysis failed: ${String(err?.message || err).slice(0, 140)}`,
+        message: `Curation analysis failed: ${redactSecretsFromMessage(String(err?.message || err)).slice(0, 140)}`,
       });
     }
   });
@@ -412,7 +448,7 @@ export async function createServer() {
         ok: false,
         code: 'PROVIDER_ERROR',
         retryable: true,
-        message: `Organization failed: ${String(err?.message || err).slice(0, 140)}`,
+        message: `Organization failed: ${redactSecretsFromMessage(String(err?.message || err)).slice(0, 140)}`,
         collections: Array.isArray(req.body?.existingCollections)
           ? req.body.existingCollections
           : [],
@@ -554,7 +590,7 @@ export async function createServer() {
         connectionStatus: 'provider_unavailable',
         code: 'PROVIDER_UNAVAILABLE',
         retryable: true,
-        message: `Childhood Room assistant failed: ${String(err?.message || err).slice(0, 140)}`,
+        message: `Childhood Room assistant failed: ${redactSecretsFromMessage(String(err?.message || err)).slice(0, 140)}`,
       });
     }
   });

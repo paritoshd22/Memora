@@ -1356,7 +1356,7 @@ async function runTests() {
     passed++;
   }
 
-  // 20. Test: 3D Childhood World Placement Resolver (All 9 Locations, Multi-Photo Spacing & Overflow Routing)
+  // 20. Test: 3D Childhood World Placement Resolver (All 12 Locations, Multi-Photo Spacing & Overflow Routing)
   {
     const { CHILDHOOD_WORLD_LOCATION_CATALOGUE } = await import('../../types/curation');
     const { resolve3DPlacementPosition } = await import('../../utils/roomExhibition3D');
@@ -1364,7 +1364,7 @@ async function runTests() {
     const allLocationIds = Object.keys(CHILDHOOD_WORLD_LOCATION_CATALOGUE) as Array<
       keyof typeof CHILDHOOD_WORLD_LOCATION_CATALOGUE
     >;
-    assert.equal(allLocationIds.length, 9);
+    assert.equal(allLocationIds.length, 12);
 
     const fallback = { x: 0, y: 1.5, z: 0, rotY: 0 };
     const slot0Coords: Array<{ id: string; x: number; y: number; z: number }> = [];
@@ -1488,7 +1488,176 @@ async function runTests() {
     passed++;
   }
 
-  console.log(`\n🎉 All ${passed}/21 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
+  // 22. Unsupported/Oversized Uploads, AQ.* Secret Redaction, Fallback Model Attribution, Unknown Marking & Review-Before-Save
+  {
+    const { redactSecretsFromMessage, validateMemoryUploadMediaInput } =
+      await import('../geminiConfig');
+    const { MemoryCurationService } = await import('../memoryCurationService');
+    const { buildFinalMemoryFromReview } = await import('../../utils/curationPipeline');
+
+    // 22a. Redact AQ.* and Bearer tokens as well as AIza*
+    assert.equal(
+      redactSecretsFromMessage(
+        'Error using AQ.Ab8RN6FakeTokenExample1234567890 and Bearer sk_live_secret_token_987654',
+      ),
+      'Error using [REDACTED_KEY] and Bearer [REDACTED_TOKEN]',
+    );
+
+    // 22b. Reject unsupported file formats (.zip, .exe, unsupported MIME) cleanly with 400 INVALID_INPUT
+    const zipCheck = validateMemoryUploadMediaInput({
+      fileName: 'archive.zip',
+      mimeType: 'application/zip',
+    });
+    assert.equal(zipCheck.ok, false);
+    assert.equal(zipCheck.code, 'INVALID_INPUT');
+    assert.equal(zipCheck.httpStatus, 400);
+
+    // 22c. Reject oversized files (> 50 MB declared or > 8 MB audio) cleanly with 413 PAYLOAD_TOO_LARGE
+    const hugeFileCheck = validateMemoryUploadMediaInput({
+      fileName: 'huge-home-video.mp4',
+      mimeType: 'video/mp4',
+      sizeBytes: 62 * 1024 * 1024,
+    });
+    assert.equal(hugeFileCheck.ok, false);
+    assert.equal(hugeFileCheck.code, 'PAYLOAD_TOO_LARGE');
+    assert.equal(hugeFileCheck.httpStatus, 413);
+
+    // 22d. MemoryCurationService rejects unsupported upload BEFORE calling Gemini, and tracks fallback modelUsed + unknown fields
+    let modelCalls = 0;
+    const svc = new MemoryCurationService({
+      getApiKey: () => 'AIzaSyTestValidationKey1234567890',
+      executeModel: async () => {
+        modelCalls++;
+        return {
+          text: JSON.stringify({
+            suggestedTitle: 'Sunny Bicycle Note',
+            suggestedDescription: 'A short written note describing a red bicycle ride after school.',
+            assistantResponse: 'This written memory fits neatly on your Bookshelf.',
+            suggestedDate: '',
+            suggestedLocation: '',
+            suggestedTags: ['bicycle', 'summer'],
+            topics: ['childhood cycling', 'summer afternoons'],
+            suggestedPeople: [],
+            verifiedFacts: ['Written note mentions a red bicycle after school.'],
+            aiInferences: ['Likely a warm-weather afternoon memory.'],
+            uncertainInfo: [],
+            recommendedLocationId: 'bookshelf',
+            recommendedReason: 'Written reflections belong on the Childhood Room Bookshelf.',
+            confidenceScore: 0.9,
+          }),
+          modelUsed: 'gemini-3.1-flash-lite',
+        };
+      },
+    });
+
+    const badZipRes = await svc.analyzeItem({
+      fileName: 'malware.exe',
+      mimeType: 'application/x-msdownload',
+    });
+    assert.equal(badZipRes.ok, false);
+    assert.equal(badZipRes.code, 'INVALID_INPUT');
+    assert.equal(badZipRes.httpStatus, 400);
+    assert.equal(modelCalls, 0);
+
+    const textRes = await svc.analyzeItem({
+      fileName: 'bike-note.txt',
+      mimeType: 'text/plain',
+      sourceType: 'text',
+      extractedText: 'I rode my red bicycle down the quiet street after school.',
+    });
+    assert.equal(textRes.ok, true);
+    assert.equal(textRes.modelUsed, 'gemini-3.1-flash-lite');
+    assert.equal(textRes.report?.modelUsed, 'gemini-3.1-flash-lite');
+    assert.equal(textRes.report?.mediaCategory, 'story');
+    assert.equal(textRes.report?.autoPlacedIn3D, false);
+    assert.deepEqual(textRes.suggestedThemes, ['childhood cycling', 'summer afternoons']);
+    assert.equal(textRes.suggestedDate, '');
+    assert.equal(textRes.suggestedLocation, '');
+    assert.ok(
+      (textRes.report?.uncertainInfo || []).some((u) => /date|year/i.test(u)),
+      'Unknown date should be explicitly noted in uncertainInfo',
+    );
+
+    // 22e. Review-before-save: Approve with edits vs Reject AI & Save Original
+    const draftMemory: any = {
+      id: 'mem-review-1',
+      ownerId: 'user-1',
+      roomId: 'childhood',
+      title: 'Sunny Bicycle Note',
+      subtitle: 'Bookshelf',
+      type: 'story',
+      mediaType: 'story',
+      mediaFileName: 'bike-note.txt',
+      date: '',
+      year: 2026,
+      location: '',
+      people: [],
+      emotionTags: ['Preserved Archive'],
+      category: 'Story',
+      description: 'A short written note describing a red bicycle ride after school.',
+      story: 'I rode my red bicycle down the quiet street after school.',
+      accessionNumber: 'ACC.2026.REV1',
+      motif: 'treehouse_meadow',
+      palette: ['#F4D8AF'],
+      tags: ['childhood cycling'],
+      aiSummary: 'Written reflections belong on the Bookshelf.',
+      assistantNote: 'Fits on Bookshelf.',
+      curatedZoneId: 'bookshelf',
+      hiddenFrom3D: true,
+      userProvided: {
+        title: 'My Red Bike',
+        description: 'Note from my notebook.',
+        date: '1998',
+      },
+      aiSuggestions: {
+        title: 'Sunny Bicycle Note',
+        description: 'AI description',
+        tags: ['childhood cycling'],
+        locationId: 'bookshelf',
+        modelUsed: 'gemini-3.1-flash-lite',
+      },
+      curationReport: textRes.report,
+    };
+
+    const approvedMem = buildFinalMemoryFromReview({
+      memory: draftMemory,
+      mode: 'approved',
+      edits: {
+        title: 'Red Bike After School',
+        description: 'Edited description by user.',
+        date: '1998',
+        themes: ['cycling', 'after school'],
+        locationId: 'study_corner',
+      },
+    });
+    assert.equal(approvedMem.hiddenFrom3D, false);
+    assert.equal(approvedMem.title, 'Red Bike After School');
+    assert.equal(approvedMem.curatedZoneId, 'study_corner');
+    assert.equal(approvedMem.confirmationStatus, 'user_edited');
+    assert.deepEqual(approvedMem.tags, ['cycling', 'after school']);
+    assert.ok(approvedMem.aiSuggestions, 'Approved memory keeps aiSuggestions attribution separate');
+
+    const rejectedAiMem = buildFinalMemoryFromReview({
+      memory: draftMemory,
+      mode: 'rejected_ai_saved_manual',
+      edits: {
+        locationId: 'keepsake_corner',
+      },
+    });
+    assert.equal(rejectedAiMem.hiddenFrom3D, false);
+    assert.equal(rejectedAiMem.title, 'My Red Bike');
+    assert.equal(rejectedAiMem.description, 'Note from my notebook.');
+    assert.equal(rejectedAiMem.date, '1998');
+    assert.equal(rejectedAiMem.confirmationStatus, 'manual_no_ai');
+    assert.equal(rejectedAiMem.aiSuggestions, undefined);
+    assert.equal(rejectedAiMem.curationReport, undefined);
+    assert.equal(rejectedAiMem.mediaFileName, 'bike-note.txt');
+
+    console.log('✅ Test 22 Passed: Unsupported/oversized upload rejection, AQ.*/Bearer secret redaction, fallback model tracking, unknown-field transparency, and review/edit/reject-before-save.');
+    passed++;
+  }
+
+  console.log(`\n🎉 All ${passed}/22 AI Provider, Gemini Curation, 3D Placement, Memory-to-3D, Persistence & Security tests passed!`);
 }
 
 runTests().catch((err) => {

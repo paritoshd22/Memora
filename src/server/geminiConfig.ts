@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import type { AICapability, ConnectionState } from '../types/aiStudio';
 
 /**
@@ -35,7 +35,93 @@ export const ALLOWED_IMAGE_MIME_TYPES = new Set<string>([
   'image/gif',
 ]);
 
+export const ALLOWED_AUDIO_MIME_TYPES = new Set<string>([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/ogg',
+  'audio/aac',
+  'audio/flac',
+  'audio/webm',
+]);
+
+export const ALLOWED_VIDEO_MIME_TYPES = new Set<string>([
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-m4v',
+  'video/x-matroska',
+]);
+
+export const ALLOWED_DOCUMENT_MIME_TYPES = new Set<string>([
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'application/rtf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
+
+export const SUPPORTED_SERVER_EXTENSIONS = new Set<string>([
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'heic',
+  'avif',
+  'mp4',
+  'mov',
+  'webm',
+  'm4v',
+  'mkv',
+  'mp3',
+  'wav',
+  'm4a',
+  'ogg',
+  'aac',
+  'flac',
+  'weba',
+  'pdf',
+  'txt',
+  'md',
+  'json',
+  'csv',
+  'log',
+  'doc',
+  'docx',
+  'rtf',
+]);
+
+export const DISALLOWED_BINARY_EXTENSIONS = new Set<string>([
+  'exe',
+  'dll',
+  'bat',
+  'cmd',
+  'sh',
+  'dmg',
+  'iso',
+  'apk',
+  'msi',
+  'zip',
+  'rar',
+  '7z',
+  'tar',
+  'gz',
+  'bin',
+]);
+
 export const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10 MB decoded image limit
+export const MAX_AUDIO_BASE64_BYTES = 8 * 1024 * 1024; // 8 MB decoded audio limit
+export const MAX_DOCUMENT_BASE64_BYTES = 8 * 1024 * 1024; // 8 MB decoded document limit
+export const MAX_DECLARED_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB max upload file size
 
 /**
  * Routes each MEMORA AI capability to its designated Gemini model ID.
@@ -74,7 +160,9 @@ export type GeminiErrorCode =
   | 'RATE_LIMITED'
   | 'MODEL_UNAVAILABLE'
   | 'PROVIDER_UNAVAILABLE'
-  | 'INVALID_AI_RESPONSE';
+  | 'INVALID_AI_RESPONSE'
+  | 'INVALID_INPUT'
+  | 'PAYLOAD_TOO_LARGE';
 
 export interface ClassifiedGeminiError {
   code: GeminiErrorCode;
@@ -122,12 +210,16 @@ export function isValidGeminiApiKey(val: string | undefined): val is string {
 }
 
 /**
- * Redacts any potential API key tokens (`AIza...`) from error strings so credentials
- * can never leak into logs, responses, or UI messages.
+ * Redacts any potential API key or bearer tokens (`AIza...`, `AQ....`, `Bearer ...`)
+ * from error strings so credentials can never leak into logs, responses, or UI messages.
  */
 export function redactSecretsFromMessage(input: string): string {
   if (!input) return '';
-  let sanitized = input.replace(/AIza[0-9A-Za-z_-]{12,}/g, '[REDACTED_KEY]');
+  let sanitized = input
+    .replace(/AIza[0-9A-Za-z_-]{12,}/g, '[REDACTED_KEY]')
+    .replace(/AQ\.[0-9A-Za-z._-]{12,}/g, '[REDACTED_KEY]')
+    .replace(/Bearer\s+[0-9A-Za-z._-]{16,}/gi, 'Bearer [REDACTED_TOKEN]')
+    .replace(/([?&]key=)[^&\s]+/gi, '$1[REDACTED_KEY]');
   const envKey = process.env.GEMINI_API_KEY?.trim();
   if (envKey && envKey.length >= 10 && sanitized.includes(envKey)) {
     sanitized = sanitized.split(envKey).join('[REDACTED_KEY]');
@@ -140,6 +232,8 @@ export interface SanitizedImagePayloadResult {
   base64Data?: string;
   mimeType?: string;
   approximateBytes?: number;
+  code?: 'INVALID_INPUT' | 'PAYLOAD_TOO_LARGE';
+  httpStatus?: number;
   errorMessage?: string;
 }
 
@@ -155,6 +249,8 @@ export function sanitizeBase64ImageInput(
   if (!rawBase64 || typeof rawBase64 !== 'string' || !rawBase64.trim()) {
     return {
       ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
       errorMessage: 'Image base64 payload is empty or missing.',
     };
   }
@@ -176,6 +272,8 @@ export function sanitizeBase64ImageInput(
   if (cleaned.length < 8 || !/^[A-Za-z0-9+/=_-]+$/.test(cleaned)) {
     return {
       ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
       errorMessage: 'Malformed base64 image encoding.',
     };
   }
@@ -192,6 +290,8 @@ export function sanitizeBase64ImageInput(
   if (!ALLOWED_IMAGE_MIME_TYPES.has(detectedMime)) {
     return {
       ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
       errorMessage: `Unsupported image MIME type "${detectedMime}". Supported types: JPEG, PNG, WebP, GIF.`,
     };
   }
@@ -200,6 +300,8 @@ export function sanitizeBase64ImageInput(
   if (approximateBytes > maxBytes) {
     return {
       ok: false,
+      code: 'PAYLOAD_TOO_LARGE',
+      httpStatus: 413,
       approximateBytes,
       errorMessage: `Image payload (${(approximateBytes / (1024 * 1024)).toFixed(1)} MB) exceeds maximum allowed limit (${(maxBytes / (1024 * 1024)).toFixed(0)} MB).`,
     };
@@ -211,6 +313,121 @@ export function sanitizeBase64ImageInput(
     mimeType: detectedMime,
     approximateBytes,
   };
+}
+
+export interface MediaUploadValidationResult {
+  ok: boolean;
+  code?: 'INVALID_INPUT' | 'PAYLOAD_TOO_LARGE';
+  httpStatus?: number;
+  errorMessage?: string;
+}
+
+/**
+ * Validates file type, MIME type, and size limits for uploaded memory items
+ * (photos, videos, audio, and text/documents) before invoking Gemini.
+ */
+export function validateMemoryUploadMediaInput(item: {
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  audioBase64?: string;
+  audioMimeType?: string;
+  documentBase64?: string;
+  detectedMediaType?: string;
+  sourceType?: string;
+}): MediaUploadValidationResult {
+  const fileName = String(item.fileName || '').trim();
+  const mimeType = String(item.mimeType || '').trim().toLowerCase();
+  const extMatch = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);
+  const ext = extMatch ? extMatch[1] : '';
+
+  if (typeof item.sizeBytes === 'number' && item.sizeBytes > MAX_DECLARED_UPLOAD_BYTES) {
+    return {
+      ok: false,
+      code: 'PAYLOAD_TOO_LARGE',
+      httpStatus: 413,
+      errorMessage: `"${fileName || 'Uploaded file'}" (${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB) exceeds the 50 MB upload size limit.`,
+    };
+  }
+
+  if (ext && DISALLOWED_BINARY_EXTENSIONS.has(ext)) {
+    return {
+      ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
+      errorMessage: `"${fileName}" is not a supported memory file type. Please upload photos (JPG, PNG, WebP, GIF), videos (MP4, WebM, MOV), audio (MP3, WAV, M4A, OGG), or text/documents (TXT, PDF, MD, DOCX).`,
+    };
+  }
+
+  const isKnownMime =
+    !mimeType ||
+    mimeType === 'application/octet-stream' ||
+    ALLOWED_IMAGE_MIME_TYPES.has(mimeType) ||
+    ALLOWED_AUDIO_MIME_TYPES.has(mimeType) ||
+    ALLOWED_VIDEO_MIME_TYPES.has(mimeType) ||
+    ALLOWED_DOCUMENT_MIME_TYPES.has(mimeType) ||
+    mimeType.startsWith('text/');
+
+  if (mimeType && mimeType !== 'application/octet-stream' && !isKnownMime) {
+    return {
+      ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
+      errorMessage: `Unsupported file format "${mimeType}" for "${fileName || 'uploaded file'}". Supported memory types: photos, videos, audio, and text/documents.`,
+    };
+  }
+
+  if (mimeType === 'application/octet-stream' && ext && !SUPPORTED_SERVER_EXTENSIONS.has(ext)) {
+    return {
+      ok: false,
+      code: 'INVALID_INPUT',
+      httpStatus: 400,
+      errorMessage: `"${fileName}" has an unsupported file extension ".${ext}". Supported memory types: photos, videos, audio, and text/documents.`,
+    };
+  }
+
+  if (typeof item.audioBase64 === 'string' && item.audioBase64.trim().length > 0) {
+    const cleanedAudio = item.audioBase64
+      .trim()
+      .replace(/^data:[^;]+;base64,/i, '')
+      .replace(/\s+/g, '');
+    const audioBytes = Math.floor((cleanedAudio.length * 3) / 4);
+    if (audioBytes > MAX_AUDIO_BASE64_BYTES) {
+      return {
+        ok: false,
+        code: 'PAYLOAD_TOO_LARGE',
+        httpStatus: 413,
+        errorMessage: `Audio clip (${(audioBytes / (1024 * 1024)).toFixed(1)} MB) exceeds the 8 MB server analysis limit. Trim or compress the clip and try again.`,
+      };
+    }
+    const audioMime = String(item.audioMimeType || mimeType || '').toLowerCase();
+    if (audioMime && !ALLOWED_AUDIO_MIME_TYPES.has(audioMime)) {
+      return {
+        ok: false,
+        code: 'INVALID_INPUT',
+        httpStatus: 400,
+        errorMessage: `Unsupported audio MIME type "${audioMime}". Supported audio formats: MP3, WAV, M4A, OGG, AAC, FLAC, WebM.`,
+      };
+    }
+  }
+
+  if (typeof item.documentBase64 === 'string' && item.documentBase64.trim().length > 0) {
+    const cleanedDoc = item.documentBase64
+      .trim()
+      .replace(/^data:[^;]+;base64,/i, '')
+      .replace(/\s+/g, '');
+    const docBytes = Math.floor((cleanedDoc.length * 3) / 4);
+    if (docBytes > MAX_DOCUMENT_BASE64_BYTES) {
+      return {
+        ok: false,
+        code: 'PAYLOAD_TOO_LARGE',
+        httpStatus: 413,
+        errorMessage: `Document (${(docBytes / (1024 * 1024)).toFixed(1)} MB) exceeds the 8 MB server analysis limit.`,
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 export function createGeminiClient(apiKey: string): GoogleGenAI {
@@ -413,6 +630,19 @@ export async function generateGeminiContentWithResilience(
 
   for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
     const modelId = candidateModels[mIdx];
+    const effectiveConfig: Record<string, unknown> = { ...(config || {}) };
+    if (
+      !effectiveConfig.thinkingConfig &&
+      (modelId === GEMINI_MODELS.primary || modelId === GEMINI_MODELS.metadata)
+    ) {
+      effectiveConfig.thinkingConfig = {
+        thinkingLevel:
+          modelId === GEMINI_MODELS.metadata
+            ? ThinkingLevel.MINIMAL
+            : ThinkingLevel.LOW,
+      };
+    }
+
     for (let retry = 0; retry <= maxRetriesPerModel; retry++) {
       totalAttempts++;
       let timerId: ReturnType<typeof setTimeout> | null = null;
@@ -421,7 +651,10 @@ export async function generateGeminiContentWithResilience(
           client.models.generateContent({
             model: modelId,
             contents: contents as any,
-            config: config as any,
+            config:
+              Object.keys(effectiveConfig).length > 0
+                ? (effectiveConfig as any)
+                : undefined,
           }),
           new Promise<never>((_, reject) => {
             timerId = setTimeout(() => {
@@ -430,6 +663,7 @@ export async function generateGeminiContentWithResilience(
               );
               timeoutErr.status = 503;
               timeoutErr.code = 'PROVIDER_UNAVAILABLE';
+              timeoutErr.isTimeout = true;
               reject(timeoutErr);
             }, timeoutMs);
           }),
@@ -463,8 +697,11 @@ export async function generateGeminiContentWithResilience(
           throw err;
         }
 
-        // If model returned 404 MODEL_UNAVAILABLE, move immediately to the next candidate model
-        if (classified.code === 'MODEL_UNAVAILABLE') {
+        // If model returned 404 MODEL_UNAVAILABLE or timed out and a faster fallback exists, move immediately to next model
+        if (
+          classified.code === 'MODEL_UNAVAILABLE' ||
+          ((err as any)?.isTimeout && mIdx < candidateModels.length - 1)
+        ) {
           break;
         }
 

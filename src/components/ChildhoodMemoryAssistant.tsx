@@ -17,6 +17,10 @@ import {
   CurationBatchItemInput,
 } from '../types/curation';
 import { Memory } from '../types/museum';
+import {
+  prepareFileForAutoCuration,
+  validateUploadFileCandidate,
+} from '../utils/clientMediaExtractor';
 
 interface AssistantChatEntry {
   id: string;
@@ -49,43 +53,6 @@ interface ChildhoodMemoryAssistantProps {
   onMemoryUpdatedFromAssistant: (updatedMemory: Memory) => void;
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Could not read selected file.'));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function createCompactAnalysisImage(
-  dataUrl: string,
-  mimeType: string,
-): Promise<{ base64: string; mimeType: string }> {
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error('Image decode failed'));
-      el.src = dataUrl;
-    });
-    const maxDim = 1024;
-    const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(img.width * scale));
-    canvas.height = Math.max(1, Math.round(img.height * scale));
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const compactUrl = canvas.toDataURL('image/jpeg', 0.84);
-      return { base64: compactUrl, mimeType: 'image/jpeg' };
-    }
-  } catch {
-    // Fall back to original data URL if canvas resize is unavailable
-  }
-  return { base64: dataUrl, mimeType: mimeType || 'image/jpeg' };
-}
-
 export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> = ({
   visible,
   childhoodMemories,
@@ -106,6 +73,14 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
   const lastObservedIdRef = useRef<string | null>(null);
   const lastAddedIdRef = useRef<string | null>(null);
   const scrollEndRef = useRef<HTMLDivElement | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const chatSeqRef = useRef<number>(0);
+
+  useEffect(() => {
+    return () => {
+      chatAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -222,34 +197,42 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
     if (files.length === 0) return;
 
     const prepared: CurationBatchItemInput[] = [];
+    const rejectedReasons: string[] = [];
+    const seenKeys = new Set<string>();
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      try {
-        const originalDataUrl = await readFileAsDataUrl(file);
-        const isImg = file.type.startsWith('image/');
-        const compact = isImg
-          ? await createCompactAnalysisImage(originalDataUrl, file.type)
-          : undefined;
-        prepared.push({
-          tempId: `${Date.now()}_${i}_${Math.random().toString(36).slice(2, 7)}`,
-          fileName: file.name,
-          mimeType: file.type || 'image/jpeg',
-          detectedMediaType: isImg
-            ? 'image'
-            : file.type.startsWith('video/')
-              ? 'video'
-              : file.type.startsWith('audio/')
-                ? 'audio'
-                : 'document',
-          sizeBytes: file.size,
-          originalDataUrl,
-          analysisImageBase64: compact?.base64,
-          analysisImageMimeType: compact?.mimeType,
-          captureSource: 'upload',
-        });
-      } catch {
-        // skip unreadable file
+      const check = validateUploadFileCandidate(
+        file,
+        childhoodMemories,
+        seenKeys,
+      );
+      if (!check.valid) {
+        rejectedReasons.push(
+          check.reason || `"${file.name}" cannot be uploaded.`,
+        );
+        continue;
       }
+      try {
+        const item = await prepareFileForAutoCuration(file);
+        prepared.push(item);
+      } catch {
+        rejectedReasons.push(
+          `"${file.name}" could not be read. Please verify the file and try again.`,
+        );
+      }
+    }
+
+    if (rejectedReasons.length > 0) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-upload-${Date.now()}`,
+          role: 'error',
+          content: rejectedReasons.join(' '),
+        },
+      ]);
+      setIsOpen(true);
     }
 
     if (prepared.length > 0) {
@@ -274,6 +257,11 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
       return;
     }
 
+    chatAbortRef.current?.abort();
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+    const reqSeq = ++chatSeqRef.current;
+
     const userEntry: AssistantChatEntry = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -296,6 +284,7 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
       const res = await fetch('/api/assistant/childhood-memory', {
         method: 'POST',
         credentials: 'same-origin',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${sessionToken}`,
@@ -324,6 +313,7 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
       });
 
       const data = await res.json().catch(() => null);
+      if (chatSeqRef.current !== reqSeq || controller.signal.aborted) return;
       if (!res.ok || !data?.ok) {
         setMessages((prev) => [
           ...prev,
@@ -389,7 +379,9 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
             : undefined,
         },
       ]);
-    } catch {
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || controller.signal.aborted) return;
+      if (chatSeqRef.current !== reqSeq) return;
       setMessages((prev) => [
         ...prev,
         {
@@ -399,7 +391,9 @@ export const ChildhoodMemoryAssistant: React.FC<ChildhoodMemoryAssistantProps> =
         },
       ]);
     } finally {
-      setIsSending(false);
+      if (chatSeqRef.current === reqSeq) {
+        setIsSending(false);
+      }
     }
   };
 

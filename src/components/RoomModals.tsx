@@ -337,7 +337,7 @@ export const RoomEditorModal: React.FC<RoomEditorModalProps> = ({
         const cat = cfg.detectedCategory || liveDetection.categoryKey;
         applyCategoryProfileToFields(cat, targetName, cfg);
         setGeminiStatusNote(
-          `✨ Gemini (${json.modelUsed || 'gemini-3.8-flash'}) generated Output A (3D Environment Blueprint) + Output B (Memory Exhibition Blueprint) for "${cfg.categoryLabel || liveDetection.profile.label}".`,
+          `✨ Gemini (${json.modelUsed || 'gemini-4-hydrogen'}) generated Output A (3D Environment Blueprint) + Output B (Memory Exhibition Blueprint) for "${cfg.categoryLabel || liveDetection.profile.label}".`,
         );
         setIsGeminiDesigning(false);
         return;

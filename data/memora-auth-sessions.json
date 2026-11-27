@@ -31,6 +31,54 @@
       "isGuest": true,
       "createdAt": "2026-11-27T06:45:21.748Z",
       "updatedAt": "2026-11-27T06:45:21.748Z"
+    },
+    "guest_00a0fb9c04728b7a": {
+      "id": "guest_00a0fb9c04728b7a",
+      "displayName": "Guest Curator",
+      "email": "guest_00a0fb9c04728b7a@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T07:30:41.378Z",
+      "updatedAt": "2026-11-27T07:30:41.378Z"
+    },
+    "guest_dda5d35af20782b1": {
+      "id": "guest_dda5d35af20782b1",
+      "displayName": "Guest Curator",
+      "email": "guest_dda5d35af20782b1@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T07:30:41.379Z",
+      "updatedAt": "2026-11-27T07:30:41.379Z"
+    },
+    "guest_7cddc5a2510beeee": {
+      "id": "guest_7cddc5a2510beeee",
+      "displayName": "Guest Curator",
+      "email": "guest_7cddc5a2510beeee@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T07:44:23.124Z",
+      "updatedAt": "2026-11-27T07:44:23.124Z"
+    },
+    "guest_71a9c7063bd9afb2": {
+      "id": "guest_71a9c7063bd9afb2",
+      "displayName": "Guest Curator",
+      "email": "guest_71a9c7063bd9afb2@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T07:44:23.125Z",
+      "updatedAt": "2026-11-27T07:44:23.125Z"
+    },
+    "guest_4b4e749792afecaf": {
+      "id": "guest_4b4e749792afecaf",
+      "displayName": "Guest Curator",
+      "email": "guest_4b4e749792afecaf@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T07:49:43.128Z",
+      "updatedAt": "2026-11-27T07:49:43.128Z"
+    },
+    "guest_de05280fd11f3fdf": {
+      "id": "guest_de05280fd11f3fdf",
+      "displayName": "Guest Curator",
+      "email": "guest_de05280fd11f3fdf@guest.memora.local",
+      "isGuest": true,
+      "createdAt": "2026-11-27T07:49:43.129Z",
+      "updatedAt": "2026-11-27T07:49:43.129Z"
     }
   },
   "sessions": {},
@@ -38,6 +86,12 @@
     "33a4535de848cba735710b9b8ca8b2bd5fb39c9f8b2fc2c820f7514e4b7a3138",
     "402d2c59b7ed841e747bd1a22500ba1c979b665108d8dc9cfd3e26604dccdf6c",
     "50206a43ea265559365033baae62581cf43c6be413eb7394a855e329de502efa",
-    "47fe2211f1907161192f0e3ae7f01c6ff03b984207a1c5acabb16e164ac4c4b0"
+    "47fe2211f1907161192f0e3ae7f01c6ff03b984207a1c5acabb16e164ac4c4b0",
+    "6cd1c68f4433542d8744006467f76b4ad829ca4a51aedad55759c4ff9af063ec",
+    "56dcef3a47747829abff751a608600963997cf02def31f60a311f6923987d878",
+    "d293f8da053eee4d35397b6f4ef021c0beb3c4ac394d666b9aaadd940f821dc9",
+    "0ef82c0abb87187c10524fe0726f6cb7b3b91b72b95eb9b7d158dda66e9d4b59",
+    "49f904b79698f59b6bff64cf360e2b43188d8679c79847ff96d1e4d332e96ff1",
+    "30667ad0f2f598cb5ba4af6ff0d98c66da0bab32ac92603b413aae6b0015c833"
   ]
 }

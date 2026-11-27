@@ -66,6 +66,7 @@ import {
   CurationBatchState,
 } from './types/curation';
 import {
+  commitReviewedMemoriesBatch,
   executeAutoCurationBatch,
   retrySaveMemoriesBatch,
 } from './utils/curationPipeline';
@@ -1227,6 +1228,9 @@ export default function App() {
     useState<CurationBatchState | null>(null);
   const lastBatchInputItemsRef = useRef<CurationBatchItemInput[] | null>(null);
   const unsavedCurationMemoriesRef = useRef<Memory[]>([]);
+  const curationAbortRef = useRef<AbortController | null>(null);
+  const curationBatchSeqRef = useRef<number>(0);
+  const isCommittingReviewRef = useRef<boolean>(false);
   const [lastAddedChildhoodMemory, setLastAddedChildhoodMemory] =
     useState<Memory | null>(null);
 
@@ -1956,6 +1960,12 @@ export default function App() {
     items: CurationBatchItemInput[],
     options?: { explicitLocalFallback?: boolean },
   ) => {
+    // Cancel any earlier in-flight Gemini curation batch so stale responses never overwrite newer actions
+    curationAbortRef.current?.abort();
+    const controller = new AbortController();
+    curationAbortRef.current = controller;
+    const seq = ++curationBatchSeqRef.current;
+
     lastBatchInputItemsRef.current = items;
     unsavedCurationMemoriesRef.current = [];
     setCurationBatchState({
@@ -1963,7 +1973,7 @@ export default function App() {
       phase: 'analysing',
       phaseLabel: options?.explicitLocalFallback
         ? 'Saving memory without AI…'
-        : 'Analyzing memory',
+        : 'Analyzing memory with Gemini',
       totalCount: items.length,
       completedCount: 0,
       failedCount: 0,
@@ -1973,8 +1983,15 @@ export default function App() {
         detectedMediaType: it.detectedMediaType,
         status: 'queued',
         saveStatus: 'pending',
+        decision: 'pending',
         thumbnailUrl:
           it.detectedMediaType === 'image' ? it.originalDataUrl : undefined,
+        userSuppliedFacts: {
+          fileName: it.fileName,
+          title: it.userTitle,
+          description: it.userDescription,
+          date: it.userDate,
+        },
         inputSnapshot: it,
       })),
     });
@@ -1987,8 +2004,10 @@ export default function App() {
       userId: currentUser?.id || 'demo-curator',
       sessionToken,
       explicitLocalFallback: Boolean(options?.explicitLocalFallback),
+      signal: controller.signal,
       callbacks: {
         onStateChange: (nextState) => {
+          if (curationBatchSeqRef.current !== seq) return;
           setCurationBatchState(nextState);
         },
         onMemoriesAndCollectionsReady: ({
@@ -1997,6 +2016,7 @@ export default function App() {
           addedConnections,
           unsavedMemories,
         }) => {
+          if (curationBatchSeqRef.current !== seq) return;
           unsavedCurationMemoriesRef.current = unsavedMemories || [];
           if (addedMemories.length > 0) {
             setMemories((prev) => {
@@ -2120,20 +2140,217 @@ export default function App() {
     }
   };
 
-  const applyPlacementApprovals = (updates: PlacementApprovalUpdate[]) => {
-    if (updates.length === 0) return;
+  const applyPlacementApprovals = async (updates: PlacementApprovalUpdate[]) => {
+    if (updates.length === 0 || isCommittingReviewRef.current) return;
     const updateMap = new Map(updates.map((u) => [u.memoryId, u]));
+    const activeUserId = currentUser?.id || 'demo-curator';
+
+    // Separate staged review drafts (not yet saved to vault) from already-saved memories being moved
+    const stagedDraftInputs: Array<{
+      memory: Memory;
+      mode: 'approved' | 'rejected_ai_saved_manual';
+      edits: {
+        title?: string;
+        description?: string;
+        date?: string;
+        themes?: string[];
+        locationId: PlacementApprovalUpdate['locationId'];
+        moveToUnsorted?: boolean;
+      };
+    }> = [];
+    const existingMemoryUpdates: PlacementApprovalUpdate[] = [];
+
+    for (const upd of updates) {
+      const batchItem = curationBatchState?.items.find(
+        (it) => it.memoryId === upd.memoryId,
+      );
+      if (batchItem?.draftMemory && batchItem.saveStatus !== 'saved') {
+        stagedDraftInputs.push({
+          memory: batchItem.draftMemory,
+          mode: upd.mode === 'rejected_ai_saved_manual'
+            ? 'rejected_ai_saved_manual'
+            : 'approved',
+          edits: {
+            title: upd.title,
+            description: upd.description,
+            date: upd.date,
+            themes: upd.themes,
+            locationId: upd.locationId,
+            moveToUnsorted: upd.moveToUnsorted,
+          },
+        });
+      } else {
+        existingMemoryUpdates.push(upd);
+      }
+    }
+
+    // 1. Commit newly approved or AI-rejected manual drafts to persistent storage
+    if (stagedDraftInputs.length > 0) {
+      isCommittingReviewRef.current = true;
+      setCurationBatchState((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'saving',
+              phaseLabel: 'Saving reviewed memory to Childhood Room',
+              errorBannerMessage: undefined,
+            }
+          : prev,
+      );
+
+      try {
+        const commitRes = await commitReviewedMemoriesBatch({
+          drafts: stagedDraftInputs,
+          existingMemories: memories,
+          existingCollections: collections,
+          existingConnections: approvedConnections,
+          userId: activeUserId,
+          sessionToken,
+        });
+
+        unsavedCurationMemoriesRef.current = commitRes.failed.map(
+          (f) => f.memory,
+        );
+
+        if (commitRes.saved.length > 0) {
+          setMemories((prev) => {
+            const incomingIds = new Set(commitRes.saved.map((m) => m.id));
+            return [
+              ...commitRes.saved,
+              ...prev.filter((m) => !incomingIds.has(m.id)),
+            ];
+          });
+          setCollections(commitRes.updatedCollections);
+          if (commitRes.addedConnections.length > 0) {
+            setApprovedConnections((prev: MemoryConnection[]) => [
+              ...commitRes.addedConnections,
+              ...prev,
+            ]);
+          }
+          setLastAddedChildhoodMemory(commitRes.saved[0]);
+        }
+
+        const savedById = new Map(commitRes.saved.map((m) => [m.id, m]));
+        const failedById = new Map(
+          commitRes.failed.map((f) => [f.memory.id, f.error]),
+        );
+
+        setCurationBatchState((prev) => {
+          if (!prev) return prev;
+          const nextItems = prev.items.map((it) => {
+            if (!it.memoryId) return it;
+            const upd = updateMap.get(it.memoryId);
+            if (savedById.has(it.memoryId)) {
+              const savedMem = savedById.get(it.memoryId)!;
+              const cat =
+                CHILDHOOD_WORLD_LOCATION_CATALOGUE[
+                  savedMem.curatedZoneId || 'keepsake_corner'
+                ];
+              return {
+                ...it,
+                locationId: savedMem.curatedZoneId || cat.id,
+                locationLabel: cat.label,
+                suggestedTitle: savedMem.title,
+                suggestedDescription: savedMem.description,
+                suggestedDate: savedMem.date,
+                suggestedTags: savedMem.tags,
+                suggestedThemes: savedMem.tags,
+                isUnsorted: Boolean(upd?.moveToUnsorted),
+                placementApproved: true,
+                decision:
+                  upd?.mode === 'rejected_ai_saved_manual'
+                    ? ('rejected_ai_saved_manual' as const)
+                    : ('approved' as const),
+                saveStatus: 'saved' as const,
+                saveError: undefined,
+                draftMemory: undefined,
+              };
+            }
+            if (failedById.has(it.memoryId)) {
+              return {
+                ...it,
+                saveStatus: 'failed' as const,
+                saveError: failedById.get(it.memoryId),
+              };
+            }
+            return it;
+          });
+
+          const stillPending = nextItems.some(
+            (it) =>
+              it.status === 'done' &&
+              !it.placementApproved &&
+              it.decision !== 'discarded' &&
+              it.saveStatus !== 'failed',
+          );
+          const hasSaveErrors = nextItems.some(
+            (it) => it.saveStatus === 'failed',
+          );
+          return {
+            ...prev,
+            phase: hasSaveErrors
+              ? 'save_failed'
+              : stillPending
+                ? 'review'
+                : 'ready',
+            phaseLabel: hasSaveErrors
+              ? 'Could not save — retry'
+              : stillPending
+                ? 'Review remaining suggestions'
+                : 'Memory saved to Childhood Room',
+            completedCount: nextItems.filter((i) => i.saveStatus === 'saved')
+              .length,
+            failedCount: nextItems.filter(
+              (i) => i.status === 'failed' || i.saveStatus === 'failed',
+            ).length,
+            primaryReadyCollectionId:
+              commitRes.primaryCollectionId || prev.primaryReadyCollectionId,
+            primaryReadyCollectionTitle:
+              commitRes.primaryCollectionTitle ||
+              prev.primaryReadyCollectionTitle,
+            errorBannerMessage: hasSaveErrors
+              ? commitRes.failed[0]?.error || 'Could not save — retry'
+              : undefined,
+            lastUndoSnapshot:
+              commitRes.saved.length > 0
+                ? commitRes.undoSnapshot
+                : prev.lastUndoSnapshot,
+            items: nextItems,
+          };
+        });
+
+        if (commitRes.saved.length > 0) {
+          emitNotification(
+            `placement-approved-${Date.now()}`,
+            commitRes.saved.length === 1
+              ? 'Memory Saved to Childhood Room'
+              : `${commitRes.saved.length} Memories Saved to Childhood Room`,
+            'Your reviewed memory has been persisted and placed in the 3D Childhood Room.',
+            'important',
+          );
+        }
+      } finally {
+        isCommittingReviewRef.current = false;
+      }
+    }
+
+    // 2. Handle post-save location/metadata edits on already-saved memories
+    if (existingMemoryUpdates.length === 0) return;
+    const existingMap = new Map(
+      existingMemoryUpdates.map((u) => [u.memoryId, u]),
+    );
     const updatedForVault: Memory[] = [];
 
     setMemories((prev) =>
       prev.map((m) => {
-        const upd = updateMap.get(m.id);
+        const upd = existingMap.get(m.id);
         if (!upd) return m;
         const catalogEntry =
           CHILDHOOD_WORLD_LOCATION_CATALOGUE[upd.locationId] ||
           CHILDHOOD_WORLD_LOCATION_CATALOGUE.keepsake_corner;
         const cleanTitle = (upd.title ?? m.title).trim() || m.title;
-        const cleanDesc = (upd.description ?? m.description).trim() || m.description;
+        const cleanDesc =
+          (upd.description ?? m.description).trim() || m.description;
         const cleanDate = (upd.date ?? m.date).trim();
         const yearMatch = cleanDate.match(/(\d{4})/);
         const nextMem: Memory = {
@@ -2143,14 +2360,18 @@ export default function App() {
           description: cleanDesc,
           date: cleanDate,
           year: yearMatch ? Number(yearMatch[1]) : m.year,
+          tags:
+            Array.isArray(upd.themes) && upd.themes.length > 0
+              ? upd.themes
+              : m.tags,
           subtitle: upd.moveToUnsorted
             ? `${catalogEntry.label} (Unsorted)`
             : catalogEntry.label,
-          location: catalogEntry.label,
           curatedZoneId: catalogEntry.id,
           placementTarget: catalogEntry.placementTarget,
           linkedSpaceId: catalogEntry.spaceId,
           linkedObjectId: catalogEntry.linkedObjectId,
+          linked3DObject: catalogEntry.label,
           hiddenFrom3D: false,
           curationReport: m.curationReport
             ? {
@@ -2178,7 +2399,6 @@ export default function App() {
       }),
     );
 
-    const activeUserId = currentUser?.id || 'demo-curator';
     updatedForVault.forEach((mem) => {
       void syncMemoryRecordToVault(
         { ...mem, userId: activeUserId },
@@ -2190,7 +2410,7 @@ export default function App() {
     setCurationBatchState((prev) => {
       if (!prev) return prev;
       const nextItems = prev.items.map((it) => {
-        const upd = it.memoryId ? updateMap.get(it.memoryId) : undefined;
+        const upd = it.memoryId ? existingMap.get(it.memoryId) : undefined;
         if (!upd) return it;
         const cat =
           CHILDHOOD_WORLD_LOCATION_CATALOGUE[upd.locationId] ||
@@ -2206,35 +2426,51 @@ export default function App() {
           placementApproved: true,
         };
       });
-      const stillPending = nextItems.some(
-        (it) => it.status === 'done' && !it.placementApproved,
-      );
       return {
         ...prev,
-        phase: stillPending ? 'review' : 'ready',
-        phaseLabel: stillPending
-          ? 'Review remaining 3D placements'
-          : 'Placed in 3D Childhood Memory Park',
         items: nextItems,
       };
     });
-
-    emitNotification(
-      `placement-approved-${Date.now()}`,
-      updates.length === 1
-        ? 'Photo Placed in 3D Childhood Park'
-        : `${updates.length} Memories Placed in 3D Park`,
-      'Approved placement saved and mounted in your 3D Childhood Memory Park.',
-      'important',
-    );
   };
 
   const handleApproveItemPlacement = (update: PlacementApprovalUpdate) => {
-    applyPlacementApprovals([update]);
+    void applyPlacementApprovals([update]);
   };
 
   const handleApproveAllPlacements = (updates: PlacementApprovalUpdate[]) => {
-    applyPlacementApprovals(updates);
+    void applyPlacementApprovals(updates);
+  };
+
+  const handleDiscardReviewItem = (memoryId: string) => {
+    setCurationBatchState((prev) => {
+      if (!prev) return prev;
+      const nextItems = prev.items.map((it) =>
+        it.memoryId === memoryId
+          ? {
+              ...it,
+              decision: 'discarded' as const,
+              draftMemory: undefined,
+            }
+          : it,
+      );
+      const remainingPending = nextItems.some(
+        (it) =>
+          it.status === 'done' &&
+          !it.placementApproved &&
+          it.decision !== 'discarded',
+      );
+      const anySaved = nextItems.some((it) => it.saveStatus === 'saved');
+      return {
+        ...prev,
+        phase: remainingPending ? 'review' : 'ready',
+        phaseLabel: remainingPending
+          ? 'Review remaining suggestions'
+          : anySaved
+            ? 'Memory saved to Childhood Room'
+            : 'Draft discarded',
+        items: nextItems,
+      };
+    });
   };
 
   const handleUndoCurationBatch = () => {
@@ -3493,7 +3729,10 @@ export default function App() {
 
       <CurationStatusHUD
         batchState={curationBatchState}
-        onDismiss={() => setCurationBatchState(null)}
+        onDismiss={() => {
+          curationAbortRef.current?.abort();
+          setCurationBatchState(null);
+        }}
         onOpenCollection={(colId) => {
           setSelectedCollectionId(colId);
           setActiveRoomId(null);
@@ -3507,6 +3746,7 @@ export default function App() {
         onUndoLastBatch={handleUndoCurationBatch}
         onApproveItemPlacement={handleApproveItemPlacement}
         onApproveAllPlacements={handleApproveAllPlacements}
+        onDiscardReviewItem={handleDiscardReviewItem}
         onEnterChildhoodPark={() => handleEnterRoom('childhood')}
       />
 

@@ -298,6 +298,16 @@ export interface CurationBatchItemStatus {
   suggestedDescription?: string;
   suggestedDate?: string;
   suggestedTags?: string[];
+  suggestedThemes?: string[];
+  userSuppliedFacts?: {
+    fileName: string;
+    title?: string;
+    description?: string;
+    date?: string;
+  };
+  verifiedFacts?: string[];
+  aiInferences?: string[];
+  uncertainInfo?: string[];
   recommendedReason?: string;
   assistantResponse?: string;
   confidenceScore?: number;
@@ -308,6 +318,8 @@ export interface CurationBatchItemStatus {
   warnings?: string[];
   thumbnailUrl?: string;
   placementApproved?: boolean;
+  decision?: 'pending' | 'approved' | 'rejected_ai_saved_manual' | 'discarded';
+  draftMemory?: Memory;
   saveStatus?: 'pending' | 'saving' | 'saved' | 'failed';
   saveError?: string;
   errorMessage?: string;
