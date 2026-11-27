@@ -708,14 +708,27 @@ export async function syncMemoryRecordToVault(
   },
   userId?: string | null,
   sessionToken?: string | null,
+  options?: { signal?: AbortSignal },
 ): Promise<{
   ok: boolean;
   synced: boolean;
   queuedOffline: boolean;
+  aborted?: boolean;
   adapter: string;
   savedMemory?: Record<string, unknown>;
   errorMessage?: string;
 }> {
+  if (options?.signal?.aborted) {
+    return {
+      ok: false,
+      synced: false,
+      queuedOffline: false,
+      aborted: true,
+      adapter: 'cancelled',
+      errorMessage: 'Upload cancelled.',
+    };
+  }
+
   const stampedMemory = {
     ...memory,
     updatedAt:
@@ -724,17 +737,16 @@ export async function syncMemoryRecordToVault(
         : new Date().toISOString(),
   };
 
-  const binaryPayload = stampedMemory.mediaUrl || stampedMemory.customImageUrl;
-  if (
-    binaryPayload &&
-    typeof binaryPayload === 'string' &&
-    !binaryPayload.startsWith('idb://') &&
-    !binaryPayload.startsWith('/api/storage/media/')
-  ) {
-    await saveMediaToIndexedDb(stampedMemory.id, binaryPayload).catch(() => {});
-  }
-
   if (!userId || !sessionToken || typeof fetch === 'undefined') {
+    const binaryPayload = stampedMemory.mediaUrl || stampedMemory.customImageUrl;
+    if (
+      binaryPayload &&
+      typeof binaryPayload === 'string' &&
+      !binaryPayload.startsWith('idb://') &&
+      !binaryPayload.startsWith('/api/storage/media/')
+    ) {
+      await saveMediaToIndexedDb(stampedMemory.id, binaryPayload).catch(() => {});
+    }
     if (userId) {
       enqueueOfflineMemoryChange({
         kind: 'upsert',
@@ -759,6 +771,7 @@ export async function syncMemoryRecordToVault(
     const res = await fetch('/api/storage/memories', {
       method: 'POST',
       credentials: 'same-origin',
+      signal: options?.signal,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${sessionToken}`,
@@ -775,6 +788,17 @@ export async function syncMemoryRecordToVault(
       }),
     });
 
+    if (options?.signal?.aborted) {
+      return {
+        ok: false,
+        synced: false,
+        queuedOffline: false,
+        aborted: true,
+        adapter: 'cancelled',
+        errorMessage: 'Upload cancelled.',
+      };
+    }
+
     if (!res.ok) {
       let errMsg = `Server returned HTTP ${res.status}`;
       try {
@@ -783,20 +807,24 @@ export async function syncMemoryRecordToVault(
       } catch {
         // ignore JSON parse error
       }
-      enqueueOfflineMemoryChange({
-        kind: 'upsert',
-        userId,
-        memoryId: stampedMemory.id,
-        memory: compactMemoryForServerTransport(stampedMemory, {
-          allowInlineMedia: false,
-        }),
-        queuedAt: new Date().toISOString(),
-      });
+      // Do NOT enqueue client-rejected uploads (400 invalid/unsupported, 413 payload too large)
+      const isClientRejection = res.status === 400 || res.status === 413 || res.status === 415;
+      if (!isClientRejection) {
+        enqueueOfflineMemoryChange({
+          kind: 'upsert',
+          userId,
+          memoryId: stampedMemory.id,
+          memory: compactMemoryForServerTransport(stampedMemory, {
+            allowInlineMedia: false,
+          }),
+          queuedAt: new Date().toISOString(),
+        });
+      }
       return {
         ok: false,
         synced: false,
-        queuedOffline: true,
-        adapter: 'indexeddb_offline_queue',
+        queuedOffline: !isClientRejection,
+        adapter: isClientRejection ? 'server_rejected' : 'indexeddb_offline_queue',
         errorMessage: errMsg,
       };
     }
@@ -809,7 +837,17 @@ export async function syncMemoryRecordToVault(
         )
       : undefined;
 
-    if (!confirmed) {
+    if (confirmed) {
+      const binaryPayload = stampedMemory.mediaUrl || stampedMemory.customImageUrl;
+      if (
+        binaryPayload &&
+        typeof binaryPayload === 'string' &&
+        !binaryPayload.startsWith('idb://') &&
+        !binaryPayload.startsWith('/api/storage/media/')
+      ) {
+        await saveMediaToIndexedDb(stampedMemory.id, binaryPayload).catch(() => {});
+      }
+    } else {
       enqueueOfflineMemoryChange({
         kind: 'upsert',
         userId,
@@ -831,6 +869,16 @@ export async function syncMemoryRecordToVault(
       errorMessage: confirmed ? undefined : data?.message || 'Server did not confirm save.',
     };
   } catch (err: any) {
+    if (err?.name === 'AbortError' || options?.signal?.aborted) {
+      return {
+        ok: false,
+        synced: false,
+        queuedOffline: false,
+        aborted: true,
+        adapter: 'cancelled',
+        errorMessage: 'Upload cancelled.',
+      };
+    }
     enqueueOfflineMemoryChange({
       kind: 'upsert',
       userId,
@@ -848,6 +896,26 @@ export async function syncMemoryRecordToVault(
       errorMessage: String(err?.message || 'Network request failed.'),
     };
   }
+}
+
+export function compactMemoriesForLocalStorage<
+  T extends { id: string; customImageUrl?: string; mediaUrl?: string },
+>(items: T[]): T[] {
+  return items.map((m) => ({
+    ...m,
+    customImageUrl:
+      m.customImageUrl &&
+      m.customImageUrl.startsWith('data:') &&
+      m.customImageUrl.length > 16384
+        ? `idb://${m.id}`
+        : m.customImageUrl,
+    mediaUrl:
+      m.mediaUrl &&
+      m.mediaUrl.startsWith('data:') &&
+      m.mediaUrl.length > 16384
+        ? `idb://${m.id}`
+        : m.mediaUrl,
+  }));
 }
 
 export async function deleteMemoryFromStorageAdapter(

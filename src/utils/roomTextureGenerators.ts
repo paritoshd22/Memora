@@ -1132,6 +1132,7 @@ export interface BuiltExhibitionRoom3D {
     reducedMotion?: boolean,
   ) => void;
   roomId?: string;
+  updateMemories?: (nextMemories: Memory[]) => void;
   cleanup?: () => void;
   solidWallMeshes?: any[];
   bedroomInteractions?: import('./childhoodBedroomInteractions').ChildhoodBedroomInteractionController | null;

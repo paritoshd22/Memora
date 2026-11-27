@@ -126,8 +126,10 @@ import {
   evaluateRoomMemoryProximity,
   getBicycleTrailPose,
   buildContextualWorldCatalog,
+  createBoundedCanvasFromImage,
   getEffectiveRoomExhibitionStyle,
   resolveRoomInteriorMovement,
+  resolveRoomMemoryImageUrl,
 } from '../utils/roomExhibition3D';
 import { VideoMemoryPlayer } from './VideoMemoryPlayer';
 import {
@@ -1651,6 +1653,8 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
   proximityTargetRef.current = proximityTarget;
 
   const rebuildSceneRef = useRef<(() => void) | null>(null);
+  const updateMemoriesInPlaceRef = useRef<(() => void) | null>(null);
+  const hasMountedMemoriesEffectRef = useRef<boolean>(false);
   const triggerInteractAnimationRef = useRef<(() => void) | null>(null);
   const setExplorerRoomEntryRef = useRef<
     ((enteredRoomId: string) => void) | null
@@ -3282,8 +3286,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
 
     const portalDoorStateCache = new Map<string, RoomDoorState>();
     const instanceDummy = new THREE.Object3D();
+    let dynamicWorldGeneration = 0;
 
     const buildPortalsAndFloors = () => {
+      dynamicWorldGeneration += 1;
       for (let pIdx = 0; pIdx < portalRecords.length; pIdx++) {
         portalDoorStateCache.set(
           portalRecords[pIdx].roomId,
@@ -5232,24 +5238,14 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
               picLightLens.position.set(0, 0.365, 0.045);
               frameGroup.add(picLightLens);
 
-              const validCustomUrl =
-                mem.customImageUrl && !mem.customImageUrl.startsWith('idb://')
-                  ? mem.customImageUrl
-                  : mem.mediaUrl &&
-                      !mem.mediaUrl.startsWith('idb://') &&
-                      (mem.mediaUrl.startsWith('data:image/') ||
-                        mem.mediaUrl.startsWith('blob:') ||
-                        /^https?:\/\//i.test(mem.mediaUrl))
-                    ? mem.mediaUrl
-                    : undefined;
-              const imgDataUrl =
-                validCustomUrl ||
-                getProceduralMemoryArt(
-                  mem.motif,
-                  mem.palette,
-                  mem.title,
-                  mem.location,
-                );
+              const validCustomUrl = resolveRoomMemoryImageUrl(mem);
+              const proceduralFallbackUrl = getProceduralMemoryArt(
+                mem.motif,
+                mem.palette,
+                mem.title,
+                mem.location,
+              );
+              const imgDataUrl = validCustomUrl || proceduralFallbackUrl;
               // Archival linen mat board backing behind the photo plane so portrait or panoramic photos are never stretched
               const matBackingPlane = new THREE.Mesh(
                 artPlaneGeo,
@@ -5273,11 +5269,16 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
               frameGroup.add(artPlane);
               frameHitboxes.push({ mesh: artPlane, memoryId: mem.id });
 
+              const capturedWorldGen = dynamicWorldGeneration;
+              let triedPortalFallback = imgDataUrl === proceduralFallbackUrl;
               const img = new Image();
-              img.crossOrigin = 'anonymous';
-              const artTex = trackDynamic(new THREE.Texture(img));
-              artTex.colorSpace = THREE.SRGBColorSpace;
+              if (/^https?:\/\//i.test(imgDataUrl)) {
+                img.crossOrigin = 'anonymous';
+              }
               img.onload = () => {
+                if (isDisposed || capturedWorldGen !== dynamicWorldGeneration) {
+                  return;
+                }
                 const natW = Math.max(1, img.naturalWidth || img.width || 720);
                 const natH = Math.max(1, img.naturalHeight || img.height || 520);
                 const boxRatio = 0.72 / 0.52;
@@ -5287,13 +5288,29 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
                 } else {
                   artPlane.scale.set(imgRatio / boxRatio, 1, 1);
                 }
+                const bounded = createBoundedCanvasFromImage(img, 512);
+                const artTex = new THREE.CanvasTexture(bounded.canvas);
+                artTex.colorSpace = THREE.SRGBColorSpace;
                 artTex.needsUpdate = true;
+                trackDynamic(artTex);
                 artMat.map = artTex;
                 artMat.emissiveMap = artTex;
                 artMat.emissive.setHex(0xfff4dc);
                 artMat.emissiveIntensity = 0.18;
                 artMat.color.setHex(0xffffff);
                 artMat.needsUpdate = true;
+              };
+              img.onerror = () => {
+                if (
+                  isDisposed ||
+                  capturedWorldGen !== dynamicWorldGeneration ||
+                  triedPortalFallback
+                ) {
+                  return;
+                }
+                triedPortalFallback = true;
+                img.crossOrigin = null;
+                img.src = proceduralFallbackUrl;
               };
               img.src = imgDataUrl;
             });
@@ -5593,53 +5610,10 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
 
     let activeRoomInteractiveTargets: THREE.Object3D[] = [];
     let activeRoomColliderKey = '';
+    let atriumPortalsDirty = false;
 
-    const syncActiveExhibitionRoom = () => {
-      disposeActiveExhibitionBuilt();
+    const refreshActiveRoomInteractiveTargets = (built: BuiltExhibitionRoom3D) => {
       activeRoomInteractiveTargets = [];
-      activeRoomColliderKey = '';
-      shadowDirtyFrames = 2;
-      const currentActiveRoomId = activeRoomIdRef.current;
-      const room = currentActiveRoomId
-        ? roomsRef.current.find(
-            (r) => r.id === currentActiveRoomId && r.status === 'active',
-          )
-        : null;
-
-      if (!room) {
-        dynamicWorldGroup.visible = true;
-        centerpieceGroup.visible = true;
-        atriumGuideGroup.visible = true;
-        atriumBenchesGroup.visible = true;
-        atriumMotesPoints.visible =
-          !isSoftwareGl &&
-          !qualityConfig.profileId?.startsWith('desktop_') &&
-          qualityConfig.profileId !== 'mobile_performance';
-        liftCabinGroup.visible = true;
-        return;
-      }
-
-      // Hide Atrium groups while exploring inside the dedicated 3D exhibition room
-      dynamicWorldGroup.visible = false;
-      centerpieceGroup.visible = false;
-      atriumGuideGroup.visible = false;
-      atriumBenchesGroup.visible = false;
-      atriumMotesPoints.visible = false;
-      liftCabinGroup.visible = false;
-
-      const roomMemories = memoriesRef.current.filter(
-        (m) => m.roomId === room.id,
-      );
-      const built = buildExhibitionRoom3DScene({
-        room,
-        memories: roomMemories,
-        maxAnisotropy,
-        floorTexture: floorTex,
-        qualityConfig,
-        sharedMaps: sharedMaterialMaps,
-        atriumMood: atriumLightingMoodRef.current,
-      });
-      scene.add(built.rootGroup);
       built.rootGroup.updateMatrixWorld(true);
       built.rootGroup.traverse((obj) => {
         const kind = obj.userData?.kind;
@@ -5652,9 +5626,71 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           activeRoomInteractiveTargets.push(obj);
         }
       });
-      activeRoomColliderKey = `${room.id}|${built.exhibitionStyle}|${built.displayRecords.map((d) => d.placement.memory.id).join(',')}`;
-      activeExhibitionBuilt = built;
-      activeExhibitionBuiltRef.current = built;
+      activeRoomColliderKey = `${built.roomId}|${built.exhibitionStyle}|${built.displayRecords.map((d) => d.placement.memory.id).join(',')}`;
+      cachedRoomCollidersRef.current = null;
+    };
+
+    const setAtriumGroupsVisible = (visible: boolean) => {
+      dynamicWorldGroup.visible = visible;
+      centerpieceGroup.visible = visible;
+      atriumGuideGroup.visible = visible;
+      atriumBenchesGroup.visible = visible;
+      atriumMotesPoints.visible =
+        visible &&
+        !isSoftwareGl &&
+        !qualityConfig.profileId?.startsWith('desktop_') &&
+        qualityConfig.profileId !== 'mobile_performance';
+      liftCabinGroup.visible = visible;
+    };
+
+    const syncActiveExhibitionRoom = () => {
+      disposeActiveExhibitionBuilt();
+      activeRoomInteractiveTargets = [];
+      activeRoomColliderKey = '';
+      cachedRoomCollidersRef.current = null;
+      shadowDirtyFrames = 2;
+      const currentActiveRoomId = activeRoomIdRef.current;
+      const room = currentActiveRoomId
+        ? roomsRef.current.find(
+            (r) => r.id === currentActiveRoomId && r.status === 'active',
+          )
+        : null;
+
+      if (!room) {
+        if (atriumPortalsDirty) {
+          buildPortalsAndFloors();
+          atriumPortalsDirty = false;
+        }
+        setAtriumGroupsVisible(true);
+        return;
+      }
+
+      const roomMemories = memoriesRef.current.filter(
+        (m) => m.roomId === room.id,
+      );
+      try {
+        const built = buildExhibitionRoom3DScene({
+          room,
+          memories: roomMemories,
+          maxAnisotropy,
+          floorTexture: floorTex,
+          qualityConfig,
+          sharedMaps: sharedMaterialMaps,
+          atriumMood: atriumLightingMoodRef.current,
+        });
+        // Only hide Atrium groups once the exhibition room has been constructed safely
+        setAtriumGroupsVisible(false);
+        scene.add(built.rootGroup);
+        refreshActiveRoomInteractiveTargets(built);
+        activeExhibitionBuilt = built;
+        activeExhibitionBuiltRef.current = built;
+      } catch (buildErr) {
+        console.error(
+          '[AtriumScene3D] Failed to build exhibition room, restoring Atrium visibility:',
+          buildErr,
+        );
+        setAtriumGroupsVisible(true);
+      }
     };
 
     buildPortalsAndFloors();
@@ -5705,6 +5741,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     );
     rebuildSceneRef.current = () => {
       buildPortalsAndFloors();
+      atriumPortalsDirty = false;
       syncActiveExhibitionRoom();
       const rebuildFloor = sanitizeFloorIndex(
         Math.round(sanitizeFiniteNumber(explorerGroup.position.y, 0) / FLOOR_HEIGHT),
@@ -5727,6 +5764,57 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         0,
         Boolean(museumSettingsRef.current.reducedMotion),
       );
+      resumeRenderLoopRef.current?.();
+    };
+
+    updateMemoriesInPlaceRef.current = () => {
+      if (isDisposed) return;
+      const currentActiveRoomId = activeRoomIdRef.current;
+      if (
+        currentActiveRoomId &&
+        activeExhibitionBuilt &&
+        activeExhibitionBuilt.roomId === currentActiveRoomId
+      ) {
+        // Update ONLY the active room's displays and interactive furniture IN-PLACE —
+        // never dispose or recreate the room shell, renderer, camera, character, or Atrium portals.
+        const roomMemories = memoriesRef.current.filter(
+          (m) => m.roomId === activeExhibitionBuilt!.roomId,
+        );
+        try {
+          if (typeof activeExhibitionBuilt.updateMemories === 'function') {
+            activeExhibitionBuilt.updateMemories(roomMemories);
+            refreshActiveRoomInteractiveTargets(activeExhibitionBuilt);
+          } else {
+            syncActiveExhibitionRoom();
+          }
+        } catch (updateErr) {
+          console.error(
+            '[AtriumScene3D] Recovered from in-place memory update error:',
+            updateErr,
+          );
+        }
+        shadowDirtyFrames = 2;
+        atriumPortalsDirty = true;
+        resumeRenderLoopRef.current?.();
+        return;
+      }
+
+      // When viewing the Atrium (not inside a room), refresh portal preview thumbnails
+      buildPortalsAndFloors();
+      atriumPortalsDirty = false;
+      syncAllPortalEntryLights(
+        explorerGroup.position.x,
+        explorerGroup.position.z,
+        camera.position.x,
+        camera.position.y,
+        camera.position.z,
+        cameraLookTarget.x,
+        cameraLookTarget.y,
+        cameraLookTarget.z,
+        0,
+        Boolean(museumSettingsRef.current.reducedMotion),
+      );
+      resumeRenderLoopRef.current?.();
     };
 
     // 8. Explicit First-Person Cabin Elevator State Machine
@@ -7338,6 +7426,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       if (isDisposed || isContextLostLocal || isTabHidden || pauseRenderingRef.current) {
         return;
       }
+      shadowDirtyFrames = Math.max(shadowDirtyFrames, 1);
       clock.getDelta();
       if (!frameId) {
         frameId = requestAnimationFrame(tick);
@@ -7375,6 +7464,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     const onContextRestored = () => {
       isContextLostLocal = false;
       setWebglContextLost(false);
+      shadowDirtyFrames = 2;
       resumeRenderLoop();
     };
 
@@ -9320,7 +9410,15 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         }
 
         if (composer && qualityConfig.enablePostProcessing) {
-          composer.render();
+          try {
+            composer.render();
+          } catch (composerErr) {
+            console.warn(
+              '[AtriumScene3D] Composer render failed; falling back to direct renderer:',
+              composerErr,
+            );
+            renderer.render(scene, camera);
+          }
         } else {
           renderer.render(scene, camera);
         }
@@ -9432,6 +9530,9 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       }
       triggerCompassFlourishRef.current = null;
       resumeRenderLoopRef.current = null;
+      rebuildSceneRef.current = null;
+      updateMemoriesInPlaceRef.current = null;
+      dynamicWorldGeneration += 1;
       cancelActiveCameraTransition();
       gsap.killTweensOf(kineticSculpture.rotation);
       gsap.killTweensOf(innerCore.scale);
@@ -9461,25 +9562,29 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     };
   }, [sceneRetryNonce]);
 
-  // Memoized structural signature so we only rebuild 3D floor/portal/room meshes when 3D-visible data changes
-  const sceneStructureSignature = useMemo(() => {
+  // Structural signature for museum architecture/rooms ONLY (excludes memories so uploads never tear down 3D scenes)
+  const architectureStructureSignature = useMemo(() => {
     const floorSig = floors
       .map((f) => `${f.id}:${f.floorNumber}:${f.name}`)
       .join('|');
     const roomSig = rooms
-      .map((r) => {
-        const roomMems = memories.filter((m) => m.roomId === r.id);
-        const previewSig = roomMems
-          .map(
-            (m) =>
-              `${m.id}:${m.title}:${m.type}:${m.date || ''}:${m.year || ''}:${m.displayOrder ?? ''}:${m.frameStyle || ''}:${m.displayStyleOverride || ''}:${m.motif}:${m.palette}:${m.hiddenFrom3D ? '1' : '0'}:${m.curatedZoneId || ''}:${m.placementTarget || ''}:${m.linkedObjectId || ''}:${m.customImageUrl ? `${m.customImageUrl.length}:${m.customImageUrl.slice(-24)}` : ''}:${m.mediaUrl ? `${m.mediaUrl.length}:${m.mediaUrl.slice(-24)}` : ''}`,
-          )
-          .join(',');
-        return `${r.id}:${r.floorNumber}:${r.slotIndex}:${r.name}:${r.subtitle}:${r.status}:${r.accentColor}:${r.exhibitionStyle || ''}:${r.galleryLayout || ''}:${JSON.stringify(r.designConfig || {})}:${roomMems.length}:${previewSig}`;
-      })
+      .map(
+        (r) =>
+          `${r.id}:${r.floorNumber}:${r.slotIndex}:${r.name}:${r.subtitle}:${r.status}:${r.accentColor}:${r.exhibitionStyle || ''}:${r.galleryLayout || ''}:${JSON.stringify(r.designConfig || {})}`,
+      )
       .join('|');
     return `${resolveMuseumDisplayName(museumSettings.projectName)}::${floorSig}::${roomSig}`;
-  }, [floors, rooms, memories, museumSettings.projectName]);
+  }, [floors, rooms, museumSettings.projectName]);
+
+  // Memory-only signature routed to in-place room updates without destroying WebGL/room architecture
+  const memoriesUpdateSignature = useMemo(() => {
+    return memories
+      .map(
+        (m) =>
+          `${m.id}:${m.roomId}:${m.title}:${m.type}:${m.mediaType || ''}:${m.date || ''}:${m.year || ''}:${m.displayOrder ?? ''}:${m.frameStyle || ''}:${m.displayStyleOverride || ''}:${m.motif}:${m.palette}:${m.hiddenFrom3D ? '1' : '0'}:${m.curatedZoneId || ''}:${m.placementTarget || ''}:${m.linkedObjectId || ''}:${m.customImageUrl ? `${m.customImageUrl.length}:${m.customImageUrl.slice(-24)}` : ''}:${m.mediaUrl ? `${m.mediaUrl.length}:${m.mediaUrl.slice(-24)}` : ''}`,
+      )
+      .join('|');
+  }, [memories]);
 
   useEffect(() => {
     if (!hasMountedSceneRef.current) {
@@ -9490,7 +9595,18 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       rebuildSceneRef.current();
       setBedroomOverlayRevision((r) => r + 1);
     }
-  }, [sceneStructureSignature]);
+  }, [architectureStructureSignature]);
+
+  useEffect(() => {
+    if (!hasMountedMemoriesEffectRef.current) {
+      hasMountedMemoriesEffectRef.current = true;
+      return;
+    }
+    if (updateMemoriesInPlaceRef.current) {
+      updateMemoriesInPlaceRef.current();
+      setBedroomOverlayRevision((r) => r + 1);
+    }
+  }, [memoriesUpdateSignature]);
 
   const currentFloorObj = useMemo(
     () =>

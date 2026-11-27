@@ -561,6 +561,78 @@ export function resolve3DPlacementPosition(
  * with organic natural veining, subtle mineral clouds, large-format architectural slab joints,
  * and hairline brushed-brass corner inlays.
  */
+const MAX_3D_DISPLAY_TEXTURE_DIM = 1024;
+
+export function isRenderableRoomMediaUrl(
+  url: string | undefined | null,
+): url is string {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.startsWith('idb://')) return false;
+  return (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('/api/storage/media/') ||
+    trimmed.startsWith('/') ||
+    /^https?:\/\//i.test(trimmed)
+  );
+}
+
+export function resolveRoomMemoryImageUrl(mem: Memory): string | undefined {
+  if (
+    isRenderableRoomMediaUrl(mem.customImageUrl) &&
+    !mem.customImageUrl.startsWith('data:video/') &&
+    !mem.customImageUrl.startsWith('data:audio/')
+  ) {
+    return mem.customImageUrl;
+  }
+  const mt = mem.mediaType || mem.type;
+  if (
+    isRenderableRoomMediaUrl(mem.mediaUrl) &&
+    (mt === 'image' ||
+      mt === 'certificate' ||
+      mem.mediaUrl.startsWith('data:image/'))
+  ) {
+    return mem.mediaUrl;
+  }
+  return undefined;
+}
+
+export function resolveRoomMemoryVideoUrl(mem: Memory): string | undefined {
+  const mt = mem.mediaType || mem.type;
+  const candidate = mem.mediaUrl || mem.customImageUrl;
+  if (!isRenderableRoomMediaUrl(candidate)) return undefined;
+  if (
+    mt === 'video' ||
+    candidate.startsWith('data:video/') ||
+    /\.(mp4|webm|mov|m4v)(\?.*)?$/i.test(candidate)
+  ) {
+    return candidate;
+  }
+  return undefined;
+}
+
+export function createBoundedCanvasFromImage(
+  img: HTMLImageElement,
+  maxDim = MAX_3D_DISPLAY_TEXTURE_DIM,
+): { canvas: HTMLCanvasElement; natW: number; natH: number } {
+  const natW = Math.max(1, img.naturalWidth || img.width || 512);
+  const natH = Math.max(1, img.naturalHeight || img.height || 384);
+  const scale = Math.min(1, maxDim / Math.max(natW, natH));
+  const targetW = Math.max(2, Math.round(natW * scale));
+  const targetH = Math.max(2, Math.round(natH * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+  }
+  return { canvas, natW, natH };
+}
+
 export function buildExhibitionRoom3DScene(params: {
   room: Room;
   memories: Memory[];
@@ -638,6 +710,38 @@ export function buildExhibitionRoom3DScene(params: {
   const track = <T extends { dispose: () => void }>(asset: T): T => {
     disposables.push(asset);
     return asset;
+  };
+  let isRoomDisposed = false;
+  let memoryUpdateGeneration = 0;
+  const section3BDynamicTextures = new Map<THREE.Material, THREE.Texture>();
+  const section3BCinemaVideos: HTMLVideoElement[] = [];
+  const section3BMemoryUpdaters: Array<
+    (nextUploaded: Memory[], defaultMem: Memory | undefined) => void
+  > = [];
+
+  const releaseMaterialDynamicTexture = (mat: THREE.Material) => {
+    const prev = section3BDynamicTextures.get(mat);
+    if (prev) {
+      try {
+        prev.dispose();
+      } catch {
+        // ignore
+      }
+      section3BDynamicTextures.delete(mat);
+    }
+  };
+
+  const assignMaterialDynamicTexture = (
+    mat: THREE.MeshBasicMaterial | THREE.MeshStandardMaterial,
+    tex: THREE.Texture,
+  ) => {
+    releaseMaterialDynamicTexture(mat);
+    section3BDynamicTextures.set(mat, tex);
+    mat.map = tex;
+    if ('emissiveMap' in mat) {
+      mat.emissiveMap = tex;
+    }
+    mat.needsUpdate = true;
   };
 
   const solidWallMeshes: THREE.Mesh[] = [];
@@ -2337,29 +2441,40 @@ export function buildExhibitionRoom3DScene(params: {
 
     // Helper to load an actual user memory photo onto a MeshBasicMaterial or MeshStandardMaterial,
     // or show an elegant curatorial placeholder texture if no memory is uploaded for that slot.
+    // Safely guards against disposal/stale generations, downscales large photos, and supports /api/storage/media/ URLs.
     const applyMemoryOrPlaceholderTexture = (
       targetMat: THREE.MeshBasicMaterial | THREE.MeshStandardMaterial,
       mem: Memory | undefined,
       placeholderTitle: string,
       placeholderSubtitle: string,
     ) => {
+      const capturedGen = memoryUpdateGeneration;
       if (mem) {
-        const validCustomUrl =
-          mem.customImageUrl && !mem.customImageUrl.startsWith('idb://')
-            ? mem.customImageUrl
-            : mem.mediaUrl &&
-                !mem.mediaUrl.startsWith('idb://') &&
-                (mem.mediaUrl.startsWith('data:image/') ||
-                  mem.mediaUrl.startsWith('blob:') ||
-                  /^https?:\/\//i.test(mem.mediaUrl))
-              ? mem.mediaUrl
-              : undefined;
-        const imgUrl =
-          validCustomUrl ||
-          getProceduralMemoryArt(mem.motif, mem.palette, mem.title, mem.location);
+        const validCustomUrl = resolveRoomMemoryImageUrl(mem);
+        const fallbackArtUrl = getProceduralMemoryArt(
+          mem.motif,
+          mem.palette,
+          mem.title,
+          mem.location,
+        );
+        const imgUrl = validCustomUrl || fallbackArtUrl;
+        if (typeof Image === 'undefined') {
+          const emptyTex = createEmptyExhibitPlaceholderTexture(
+            mem.title || placeholderTitle,
+            placeholderSubtitle,
+            maxAnisotropy,
+          );
+          assignMaterialDynamicTexture(targetMat, emptyTex);
+          return;
+        }
         const img = new Image();
-        img.crossOrigin = 'anonymous';
+        if (/^https?:\/\//i.test(imgUrl)) {
+          img.crossOrigin = 'anonymous';
+        }
         img.onload = () => {
+          if (isRoomDisposed || capturedGen !== memoryUpdateGeneration) {
+            return;
+          }
           const canvas = document.createElement('canvas');
           canvas.width = 512;
           canvas.height = 384;
@@ -2393,27 +2508,28 @@ export function buildExhibitionRoom3DScene(params: {
             );
           }
 
-          const tex = track(new THREE.CanvasTexture(canvas));
+          const tex = new THREE.CanvasTexture(canvas);
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.anisotropy = maxAnisotropy;
           tex.needsUpdate = true;
-          targetMat.map = tex;
-          if ('emissiveMap' in targetMat) {
-            targetMat.emissiveMap = tex;
+          assignMaterialDynamicTexture(targetMat, tex);
+        };
+        img.onerror = () => {
+          if (isRoomDisposed || capturedGen !== memoryUpdateGeneration) {
+            return;
           }
-          targetMat.needsUpdate = true;
+          if (img.src !== fallbackArtUrl) {
+            img.src = fallbackArtUrl;
+          }
         };
         img.src = imgUrl;
       } else {
-        const emptyTex = track(
-          createEmptyExhibitPlaceholderTexture(
-            placeholderTitle,
-            placeholderSubtitle,
-            maxAnisotropy,
-          ),
+        const emptyTex = createEmptyExhibitPlaceholderTexture(
+          placeholderTitle,
+          placeholderSubtitle,
+          maxAnisotropy,
         );
-        targetMat.map = emptyTex;
-        targetMat.needsUpdate = true;
+        assignMaterialDynamicTexture(targetMat, emptyTex);
       }
     };
 
@@ -2646,25 +2762,41 @@ export function buildExhibitionRoom3DScene(params: {
       photoMesh.position.z = 0.034;
       fNode.add(photoMesh);
 
-      const targetMem = mem || defaultInteractMem;
-      if (targetMem) {
-        const hit = new THREE.Mesh(
-          track(new THREE.BoxGeometry(spec.w + 0.16, spec.h + 0.16, 0.24)),
-          track(new THREE.MeshBasicMaterial({ visible: false })),
+      const hit = new THREE.Mesh(
+        track(new THREE.BoxGeometry(spec.w + 0.16, spec.h + 0.16, 0.24)),
+        track(new THREE.MeshBasicMaterial({ visible: false })),
+      );
+      const syncWallSlotHitbox = (slotMem: Memory | undefined, fallbackMem: Memory | undefined) => {
+        const targetMem = slotMem || fallbackMem;
+        if (targetMem) {
+          hit.userData = {
+            kind: 'room_memory_display',
+            memoryId: targetMem.id,
+            memory: targetMem,
+            roomId: room.id,
+            title: slotMem ? slotMem.title : `Memory Wall · ${spec.slotLabel}`,
+            exhibitFormatType: 'memory_wall',
+            associated3DObject: 'Memory Wall Frame',
+            interactionType: 'open-memory',
+            subtitle: 'Memory Wall Gallery · Click or press [E] to inspect',
+          };
+        } else {
+          hit.userData = {};
+        }
+      };
+      syncWallSlotHitbox(mem, defaultInteractMem);
+      fNode.add(hit);
+
+      section3BMemoryUpdaters.push((nextUploaded, nextDefault) => {
+        const nextMem = nextUploaded[idx];
+        applyMemoryOrPlaceholderTexture(
+          matPhoto,
+          nextMem,
+          spec.slotLabel,
+          'Memory Wall Salon Frame',
         );
-        hit.userData = {
-          kind: 'room_memory_display',
-          memoryId: targetMem.id,
-          memory: targetMem,
-          roomId: room.id,
-          title: mem ? mem.title : `Memory Wall · ${spec.slotLabel}`,
-          exhibitFormatType: 'memory_wall',
-          associated3DObject: 'Memory Wall Frame',
-          interactionType: 'open-memory',
-          subtitle: 'Memory Wall Gallery · Click or press [E] to inspect',
-        };
-        fNode.add(hit);
-      }
+        syncWallSlotHitbox(nextMem, nextDefault);
+      });
     });
 
     addZoneSignPlaque3D({
@@ -2978,15 +3110,11 @@ export function buildExhibitionRoom3DScene(params: {
 
     floatingFrameSpots.forEach((spot, idx) => {
       const fMem = uploadedMemories[idx];
-      // In the open-air Childhood Memory Park, avoid crowding the central tree with empty floating boards;
-      // show all user-uploaded photos plus up to 2 warm matted heirloom keepsake frames around the tree.
-      if (isChildhoodPark && !fMem && idx >= Math.max(2, uploadedMemories.length)) {
-        return;
-      }
       const fGroup = new THREE.Group();
       const frameY = isChildhoodPark ? Math.min(2.15, spot.y - 0.22) : spot.y;
       fGroup.position.set(spot.x, frameY, spot.z);
       fGroup.rotation.y = spot.rotY;
+      fGroup.visible = !(isChildhoodPark && !fMem && idx >= Math.max(2, uploadedMemories.length));
       rootGroup.add(fGroup);
 
       animatedFloatingFrames.push({
@@ -3035,25 +3163,42 @@ export function buildExhibitionRoom3DScene(params: {
       cord.position.set(0, spot.h * 0.5 + 0.77, 0);
       fGroup.add(cord);
 
-      const targetMem = fMem || defaultInteractMem;
-      if (targetMem) {
-        const fHitbox = new THREE.Mesh(
-          track(new THREE.BoxGeometry(spot.w + 0.18, spot.h + 0.18, 0.28)),
-          track(new THREE.MeshBasicMaterial({ visible: false })),
+      const fHitbox = new THREE.Mesh(
+        track(new THREE.BoxGeometry(spot.w + 0.18, spot.h + 0.18, 0.28)),
+        track(new THREE.MeshBasicMaterial({ visible: false })),
+      );
+      const syncFloatingHitbox = (slotMem: Memory | undefined, fallbackMem: Memory | undefined) => {
+        const targetMem = slotMem || fallbackMem;
+        if (targetMem && fGroup.visible) {
+          fHitbox.userData = {
+            kind: 'room_memory_display',
+            memoryId: targetMem.id,
+            memory: targetMem,
+            roomId: room.id,
+            title: slotMem ? slotMem.title : `Floating Memories · Canopy Slot #${idx + 1}`,
+            exhibitFormatType: 'floating_memories',
+            associated3DObject: 'Floating Memory Frame',
+            interactionType: 'open-memory',
+            subtitle: 'Floating Memories Canopy · Click or press [E] to inspect',
+          };
+        } else {
+          fHitbox.userData = {};
+        }
+      };
+      syncFloatingHitbox(fMem, defaultInteractMem);
+      fGroup.add(fHitbox);
+
+      section3BMemoryUpdaters.push((nextUploaded, nextDefault) => {
+        const nextMem = nextUploaded[idx];
+        fGroup.visible = !(isChildhoodPark && !nextMem && idx >= Math.max(2, nextUploaded.length));
+        applyMemoryOrPlaceholderTexture(
+          photoMat,
+          nextMem,
+          `Floating Memory #${idx + 1}`,
+          'Suspended Tree Canopy Exhibit',
         );
-        fHitbox.userData = {
-          kind: 'room_memory_display',
-          memoryId: targetMem.id,
-          memory: targetMem,
-          roomId: room.id,
-          title: fMem ? fMem.title : `Floating Memories · Canopy Slot #${idx + 1}`,
-          exhibitFormatType: 'floating_memories',
-          associated3DObject: 'Floating Memory Frame',
-          interactionType: 'open-memory',
-          subtitle: 'Floating Memories Canopy · Click or press [E] to inspect',
-        };
-        fGroup.add(fHitbox);
-      }
+        syncFloatingHitbox(nextMem, nextDefault);
+      });
     });
 
     addZoneSignPlaque3D({
@@ -3097,50 +3242,110 @@ export function buildExhibitionRoom3DScene(params: {
     cinemaCornerGroup.add(cinemaCasing);
     cameraObstacleMeshes.push(cinemaCasing);
 
-    const videoMem =
-      uploadedMemories.find((m) => (m.type || m.mediaType) === 'video') ||
-      uploadedMemories[1] ||
-      uploadedMemories[0];
-
     const cinemaScreenMat = track(
       new THREE.MeshBasicMaterial({
         color: 0xffffff,
       }),
     );
 
-    const videoSrc = videoMem ? videoMem.mediaUrl || videoMem.customImageUrl || '' : '';
-    if (
-      videoMem &&
-      ((videoMem.type || videoMem.mediaType) === 'video' ||
-        videoSrc.startsWith('data:video') ||
-        videoSrc.startsWith('blob:') ||
-        videoSrc.endsWith('.mp4') ||
-        videoSrc.endsWith('.webm')) &&
-      videoSrc
-    ) {
-      const cVideoElem = document.createElement('video');
-      cVideoElem.src = videoSrc;
-      cVideoElem.muted = true;
-      cVideoElem.loop = true;
-      cVideoElem.playsInline = true;
-      cVideoElem.crossOrigin = 'anonymous';
-      cVideoElem.preload = 'metadata';
-      activeVideoElements.push(cVideoElem);
-
-      const cVideoTex = track(new THREE.VideoTexture(cVideoElem));
-      cVideoTex.colorSpace = THREE.SRGBColorSpace;
-      cinemaScreenMat.map = cVideoTex;
-      cVideoElem.play().catch(() => {
-        // Muted autoplay fallback
+    const stopSection3BCinemaVideos = () => {
+      section3BCinemaVideos.forEach((v) => {
+        try {
+          v.pause();
+          v.removeAttribute('src');
+          v.load();
+        } catch {
+          // ignore
+        }
       });
-    } else {
+      section3BCinemaVideos.length = 0;
+    };
+
+    const bindCinemaScreenMemory = (
+      nextUploaded: Memory[],
+      nextDefault: Memory | undefined,
+      screenHitMesh?: THREE.Mesh,
+    ) => {
+      stopSection3BCinemaVideos();
+      const capturedGen = memoryUpdateGeneration;
+      const nextVideoMem =
+        nextUploaded.find((m) => (m.type || m.mediaType) === 'video') ||
+        nextUploaded[1] ||
+        nextUploaded[0];
+      const nextVideoSrc = nextVideoMem
+        ? resolveRoomMemoryVideoUrl(nextVideoMem)
+        : undefined;
+
+      // Always bind poster or placeholder immediately so WebGL never samples an unready video texture
       applyMemoryOrPlaceholderTexture(
         cinemaScreenMat,
-        videoMem,
+        nextVideoMem,
         'Cinema Corner Widescreen',
         'Upload a childhood video or memory to play here',
       );
-    }
+
+      if (nextVideoMem && nextVideoSrc && typeof document !== 'undefined') {
+        const cVideoElem = document.createElement('video');
+        if (/^https?:\/\//i.test(nextVideoSrc)) {
+          cVideoElem.crossOrigin = 'anonymous';
+        }
+        cVideoElem.muted = true;
+        cVideoElem.loop = true;
+        cVideoElem.playsInline = true;
+        cVideoElem.preload = 'metadata';
+        section3BCinemaVideos.push(cVideoElem);
+
+        const attachReadyVideoTexture = () => {
+          if (
+            isRoomDisposed ||
+            capturedGen !== memoryUpdateGeneration ||
+            cVideoElem.readyState < 2 ||
+            cVideoElem.videoWidth <= 0
+          ) {
+            return;
+          }
+          const cVideoTex = new THREE.VideoTexture(cVideoElem);
+          cVideoTex.colorSpace = THREE.SRGBColorSpace;
+          cVideoTex.minFilter = THREE.LinearFilter;
+          cVideoTex.magFilter = THREE.LinearFilter;
+          cVideoTex.generateMipmaps = false;
+          assignMaterialDynamicTexture(cinemaScreenMat, cVideoTex);
+        };
+
+        cVideoElem.addEventListener('loadeddata', attachReadyVideoTexture, { once: true });
+        cVideoElem.addEventListener(
+          'error',
+          () => {
+            // Keep poster/placeholder texture on broken or unsupported video stream
+          },
+          { once: true },
+        );
+        cVideoElem.src = nextVideoSrc;
+        cVideoElem.play().catch(() => {
+          // Muted autoplay fallback
+        });
+      }
+
+      if (screenHitMesh) {
+        const cinemaTargetMem = nextVideoMem || nextDefault;
+        if (cinemaTargetMem) {
+          screenHitMesh.userData = {
+            kind: 'room_memory_display',
+            stationId: 'cinema_corner',
+            memoryId: cinemaTargetMem.id,
+            memory: cinemaTargetMem,
+            roomId: room.id,
+            title: `Cinema Corner: ${cinemaTargetMem.title}`,
+            exhibitFormatType: 'cinema_corner',
+            associated3DObject: 'Cinema Corner Screen',
+            interactionType: 'play-video',
+            subtitle: 'Cinema Corner Theater · Click or press [E] to watch',
+          };
+        } else {
+          screenHitMesh.userData = {};
+        }
+      }
+    };
 
     const cinemaScreenMesh = new THREE.Mesh(
       track(new THREE.PlaneGeometry(2.74, 1.54)),
@@ -3178,27 +3383,17 @@ export function buildExhibitionRoom3DScene(params: {
     cinemaCornerGroup.add(progressTrack);
 
     // Interactive hitbox on the Cinema Screen itself
-    const cinemaTargetMem = videoMem || defaultInteractMem;
-    if (cinemaTargetMem) {
-      const screenHit = new THREE.Mesh(
-        track(new THREE.BoxGeometry(2.95, 1.75, 0.35)),
-        track(new THREE.MeshBasicMaterial({ visible: false })),
-      );
-      screenHit.position.set(0, 2.08, 0.1);
-      screenHit.userData = {
-        kind: 'room_memory_display',
-        stationId: 'cinema_corner',
-        memoryId: cinemaTargetMem.id,
-        memory: cinemaTargetMem,
-        roomId: room.id,
-        title: `Cinema Corner: ${cinemaTargetMem.title}`,
-        exhibitFormatType: 'cinema_corner',
-        associated3DObject: 'Cinema Corner Screen',
-        interactionType: 'play-video',
-        subtitle: 'Cinema Corner Theater · Click or press [E] to watch',
-      };
-      cinemaCornerGroup.add(screenHit);
-    }
+    const screenHit = new THREE.Mesh(
+      track(new THREE.BoxGeometry(2.95, 1.75, 0.35)),
+      track(new THREE.MeshBasicMaterial({ visible: false })),
+    );
+    screenHit.position.set(0, 2.08, 0.1);
+    cinemaCornerGroup.add(screenHit);
+
+    bindCinemaScreenMemory(uploadedMemories, defaultInteractMem, screenHit);
+    section3BMemoryUpdaters.push((nextUploaded, nextDefault) => {
+      bindCinemaScreenMemory(nextUploaded, nextDefault, screenHit);
+    });
 
     // Architectural fluted walnut & brushed champagne-gold acoustic framing pilasters
     // (Replaces distracting bright crimson vertical curtain tubes with refined luxury theatre trim)
@@ -3278,7 +3473,10 @@ export function buildExhibitionRoom3DScene(params: {
       rotY: -0.36,
       width: 1.54,
       height: 0.48,
-      linkedMemory: videoMem || defaultInteractMem,
+      linkedMemory:
+        uploadedMemories.find(
+          (m) => m.type === 'video' || m.mediaType === 'video',
+        ) || defaultInteractMem,
     });
 
     // =======================================================================
@@ -3880,490 +4078,20 @@ export function buildExhibitionRoom3DScene(params: {
   }
 
   // =========================================================================
-  // 4. BUILD INDIVIDUAL 3D MEMORY EXHIBITION DISPLAYS (ALL 8 STYLES & 9 PARK LOCATIONS)
+  // 4. BUILD INDIVIDUAL 3D MEMORY EXHIBITION DISPLAYS (UPDATABLE IN-PLACE)
   // =========================================================================
-  // Only approved, visible memories appear in 3D (pending review drafts stay hidden until approved)
-  const visibleSection4Memories = rawMemories.filter((m) => !m.hiddenFrom3D);
-  const placements = computeExhibitionPlacements(
-    room,
-    visibleSection4Memories,
-    effectiveStyle,
-  );
-  const zoneSlotCounters: Record<string, number> = {};
+  const dynamicDisplaysGroup = new THREE.Group();
+  dynamicDisplaysGroup.name = 'dynamic_memory_displays_group';
+  rootGroup.add(dynamicDisplaysGroup);
 
-  placements.forEach((p, pIdx) => {
-    const mem = p.memory;
-    const zoneKey =
-      mem.curatedZoneId || mem.placementTarget || 'default';
-    const slotInZone = zoneSlotCounters[zoneKey] || 0;
-    zoneSlotCounters[zoneKey] = slotInZone + 1;
+  const dynamicDisplayDisposables: Array<{ dispose: () => void }> = [];
+  const dynamicDisplayVideoElements: HTMLVideoElement[] = [];
+  const dynamicDisplayObstacles = new Set<THREE.Mesh>();
+  const trackDisplay = <T extends { dispose: () => void }>(asset: T): T => {
+    dynamicDisplayDisposables.push(asset);
+    return asset;
+  };
 
-    const resolvedPos = resolve3DPlacementPosition(mem, slotInZone, {
-      x: p.x,
-      y: p.y - floorBaseY,
-      z: p.z,
-      rotY: p.rotY,
-    });
-
-    const targetX = resolvedPos.x;
-    const localY = resolvedPos.y;
-    const targetZ = resolvedPos.z;
-    const targetRotY = resolvedPos.rotY;
-
-    const displayGroup = new THREE.Group();
-    displayGroup.name = `memora_photo_display_${mem.id}`;
-    displayGroup.position.set(targetX, localY, targetZ);
-    displayGroup.rotation.y = targetRotY;
-    // Section 3B already mounts the first 7 memories into the dedicated Memory Wall,
-    // Central Tree Floating Canopy, Scrapbook, Cinema, and Audio zones.
-    // Any memory with an explicit approved placement (curatedZoneId or placementTarget)
-    // or overflow beyond Section 3B mounts cleanly as a physical 3D display at its approved location.
-    const hasExplicitPlacement = Boolean(mem.curatedZoneId || mem.placementTarget);
-    const isAlreadyInSection3B = pIdx < 7 && !hasExplicitPlacement;
-    if (!isAlreadyInSection3B) {
-      rootGroup.add(displayGroup);
-    }
-
-    // Grounded walnut-and-champagne-brass freestanding easel for outdoor park displays
-    if (resolvedPos.needsEaselStand && !isAlreadyInSection3B) {
-      const standHeight = Math.max(0.55, localY - 0.12);
-      const legGeo = track(new THREE.BoxGeometry(0.045, standHeight, 0.045));
-      [-0.32, 0.32].forEach((lx) => {
-        const leg = new THREE.Mesh(legGeo, matWalnut);
-        leg.position.set(lx, -standHeight * 0.5 - 0.08, -0.04);
-        leg.rotation.x = 0.08;
-        displayGroup.add(leg);
-      });
-      const backLeg = new THREE.Mesh(
-        track(new THREE.BoxGeometry(0.04, standHeight * 1.05, 0.04)),
-        matWalnut,
-      );
-      backLeg.position.set(0, -standHeight * 0.5 - 0.08, -0.26);
-      backLeg.rotation.x = -0.26;
-      displayGroup.add(backLeg);
-      const ledgeBar = new THREE.Mesh(
-        track(new THREE.BoxGeometry(0.92, 0.04, 0.09)),
-        matChampagneGold,
-      );
-      ledgeBar.position.set(0, -0.58, 0.03);
-      displayGroup.add(ledgeBar);
-    }
-
-    let baseFrameHex: string = '#FFFFFF';
-    let baseFrameRoughness = 0.34;
-    let baseFrameMetalness = 0.06;
-    const isMetallicFrame =
-      p.frameStyle === 'champagne_brass' ||
-      p.frameStyle === 'floating_halo' ||
-      p.frameStyle === 'bronze_museum';
-    const isDarkFrame =
-      p.frameStyle === 'minimal_dark' || p.frameStyle === 'cinema_screen';
-    if (
-      p.frameStyle === 'champagne_brass' ||
-      p.frameStyle === 'floating_halo'
-    ) {
-      baseFrameHex = '#D3AD6E';
-      baseFrameRoughness = 0.28;
-      baseFrameMetalness = 0.84;
-    } else if (p.frameStyle === 'bronze_museum') {
-      baseFrameHex = MUSEUM_LUXURY_PALETTE.bronze;
-      baseFrameRoughness = 0.32;
-      baseFrameMetalness = 0.8;
-    } else if (isDarkFrame) {
-      baseFrameHex = '#1E1A17';
-      baseFrameRoughness = 0.32;
-      baseFrameMetalness = 0.35;
-    }
-
-    const frameMat = track(
-      new THREE.MeshPhysicalMaterial({
-        map: isMetallicFrame || isDarkFrame ? null : walnutTex,
-        normalMap: isMetallicFrame
-          ? metalPBR.normalMap
-          : isDarkFrame
-            ? null
-            : woodPBR.normalMap,
-        normalScale: new THREE.Vector2(0.18, 0.18),
-        roughnessMap: isMetallicFrame
-          ? metalPBR.roughnessMap
-          : isDarkFrame
-            ? null
-            : woodPBR.roughnessMap,
-        color: new THREE.Color(baseFrameHex),
-        emissive: new THREE.Color(0x000000),
-        emissiveIntensity: 0,
-        roughness: baseFrameRoughness,
-        metalness: baseFrameMetalness,
-        clearcoat: isMetallicFrame ? 0.22 : isDarkFrame ? 0.12 : 0.16,
-        envMapIntensity: isMetallicFrame ? 0.96 : 0.48,
-      }),
-    );
-
-    const frameW = p.width;
-    const frameH = p.height;
-
-    const frameDepth = p.isMainCinemaScreen ? 0.12 : 0.065;
-    const frameMesh = new THREE.Mesh(
-      track(new THREE.BoxGeometry(frameW + 0.14, frameH + 0.14, frameDepth)),
-      frameMat,
-    );
-    displayGroup.add(frameMesh);
-    if (!isAlreadyInSection3B) {
-      cameraObstacleMeshes.push(frameMesh);
-    }
-
-    if (!p.isMainCinemaScreen) {
-      const matBoard = new THREE.Mesh(
-        track(new THREE.BoxGeometry(frameW + 0.02, frameH + 0.02, frameDepth + 0.01)),
-        track(
-          new THREE.MeshStandardMaterial({
-            color: new THREE.Color(
-              p.mountStyle === 'scrapbook_collage' ? '#EFE4D2' : '#FAF5EC',
-            ),
-            roughness: 0.8,
-          }),
-        ),
-      );
-      matBoard.position.z = 0.006;
-      displayGroup.add(matBoard);
-    }
-
-    const artMat = track(
-      new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        emissive: new THREE.Color('#FFF4DC'),
-        emissiveIntensity: p.isMainCinemaScreen ? 0.32 : 0.16,
-        roughness: 0.32,
-        metalness: 0.04,
-      }),
-    );
-
-    let videoElem: HTMLVideoElement | null = null;
-    let videoTex: THREE.VideoTexture | null = null;
-    const isVideoMem = (mem.type || mem.mediaType) === 'video';
-    const videoSrc = mem.mediaUrl || mem.customImageUrl || '';
-
-    // Warm ivory archival museum mat backing so aspect-ratio-fitted photos sit gracefully framed
-    const matBoardW = frameW - 0.1;
-    const matBoardH = frameH - 0.1;
-    const matBoardMesh = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(matBoardW, matBoardH)),
-      track(
-        new THREE.MeshStandardMaterial({
-          color: new THREE.Color('#F5EDE0'),
-          roughness: 0.9,
-          metalness: 0.02,
-        }),
-      ),
-    );
-    matBoardMesh.position.z = frameDepth * 0.5 + 0.006;
-    displayGroup.add(matBoardMesh);
-
-    const artPlaneMaxW = frameW - 0.16;
-    const artPlaneMaxH = frameH - 0.16;
-    const artPlane = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(artPlaneMaxW, artPlaneMaxH)),
-      artMat,
-    );
-    artPlane.position.z = frameDepth * 0.5 + 0.014;
-    displayGroup.add(artPlane);
-
-    if (
-      isVideoMem &&
-      p.isMainCinemaScreen &&
-      videoSrc &&
-      (videoSrc.startsWith('data:video') ||
-        videoSrc.startsWith('blob:') ||
-        videoSrc.endsWith('.mp4') ||
-        videoSrc.endsWith('.webm'))
-    ) {
-      videoElem = document.createElement('video');
-      videoElem.src = videoSrc;
-      videoElem.muted = true;
-      videoElem.loop = true;
-      videoElem.playsInline = true;
-      videoElem.crossOrigin = 'anonymous';
-      videoElem.preload = 'metadata';
-      activeVideoElements.push(videoElem);
-
-      videoTex = track(new THREE.VideoTexture(videoElem));
-      videoTex.colorSpace = THREE.SRGBColorSpace;
-      artMat.map = videoTex;
-      artMat.emissiveMap = videoTex;
-      videoElem.play().catch(() => {
-        // Fallback if browser blocks even muted playback
-      });
-    } else {
-      const candidateImgUrl =
-        mem.customImageUrl && !mem.customImageUrl.startsWith('idb://')
-          ? mem.customImageUrl
-          : mem.mediaUrl &&
-              !mem.mediaUrl.startsWith('idb://') &&
-              (mem.type === 'image' || mem.mediaType === 'image')
-            ? mem.mediaUrl
-            : '';
-      const fallbackArtUrl = getProceduralMemoryArt(
-        mem.motif,
-        mem.palette,
-        mem.title,
-        mem.location,
-      );
-      const imgDataUrl = candidateImgUrl || fallbackArtUrl;
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      const artTex = track(new THREE.Texture(img));
-      artTex.colorSpace = THREE.SRGBColorSpace;
-      artTex.anisotropy = maxAnisotropy;
-      artTex.minFilter = THREE.LinearMipmapLinearFilter;
-      artTex.magFilter = THREE.LinearFilter;
-      artTex.generateMipmaps = true;
-      img.onload = () => {
-        const natW = img.naturalWidth || 4;
-        const natH = img.naturalHeight || 3;
-        const imgAspect = natW / natH;
-        const boxAspect = artPlaneMaxW / artPlaneMaxH;
-        if (imgAspect > boxAspect) {
-          artPlane.scale.set(1, Math.max(0.28, boxAspect / imgAspect), 1);
-        } else {
-          artPlane.scale.set(Math.max(0.28, imgAspect / boxAspect), 1, 1);
-        }
-        artTex.needsUpdate = true;
-        artMat.map = artTex;
-        artMat.emissiveMap = artTex;
-        artMat.needsUpdate = true;
-      };
-      img.onerror = () => {
-        if (img.src !== fallbackArtUrl) {
-          img.src = fallbackArtUrl;
-        }
-      };
-      img.src = imgDataUrl;
-    }
-
-    // Subtle champagne-brass corner medallion indicates an interactive placed photograph
-    if (mem.customImageUrl || mem.curatedZoneId) {
-      const badgeDot = new THREE.Mesh(
-        track(new THREE.CylinderGeometry(0.036, 0.036, 0.014, 14)),
-        matChampagneGold,
-      );
-      badgeDot.rotation.x = Math.PI / 2;
-      badgeDot.position.set(
-        frameW * 0.5 - 0.06,
-        -frameH * 0.5 + 0.06,
-        frameDepth * 0.5 + 0.02,
-      );
-      displayGroup.add(badgeDot);
-    }
-
-    const haloMat = track(
-      new THREE.MeshBasicMaterial({
-        color: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
-        transparent: true,
-        opacity:
-          p.mountStyle === 'floating_exhibition' || p.isMainCinemaScreen
-            ? 0.24
-            : 0.06,
-        depthWrite: false,
-      }),
-    );
-    const haloMesh = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(frameW + 0.42, frameH + 0.42)),
-      haloMat,
-    );
-    haloMesh.position.z = -frameDepth * 0.5 - 0.015;
-    displayGroup.add(haloMesh);
-
-    const picHoodW = Math.min(0.68, frameW * 0.45);
-    const picHood = new THREE.Mesh(
-      track(new THREE.BoxGeometry(picHoodW, 0.04, 0.09)),
-      matChampagneGold,
-    );
-    picHood.position.set(0, frameH * 0.5 + 0.12, 0.06);
-    displayGroup.add(picHood);
-
-    const picLightMat = track(
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color('#FFFCF6'),
-        emissive: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
-        emissiveIntensity: 0.9,
-        roughness: 0.2,
-      }),
-    );
-    const picLightLens = new THREE.Mesh(
-      track(new THREE.BoxGeometry(picHoodW * 0.86, 0.018, 0.055)),
-      picLightMat,
-    );
-    picLightLens.position.set(0, frameH * 0.5 + 0.1, 0.065);
-    displayGroup.add(picLightLens);
-
-    const plaqueTex = track(
-      createMemoryMuseumPlaqueTexture(
-        mem,
-        p.chronologicalDateLabel,
-        room.accentColor,
-        maxAnisotropy,
-      ),
-    );
-    const plaqueMesh = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(Math.min(1.32, frameW * 0.85), 0.34)),
-      track(new THREE.MeshBasicMaterial({ map: plaqueTex })),
-    );
-    plaqueMesh.position.set(0, -frameH * 0.5 - 0.26, 0.035);
-    displayGroup.add(plaqueMesh);
-
-    if (p.mountStyle === 'floating_exhibition') {
-      const cableHeight = Math.max(0.5, roomH - localY - frameH * 0.5);
-      const cableGeo = track(
-        new THREE.CylinderGeometry(0.008, 0.008, cableHeight, 8),
-      );
-      [-frameW * 0.38, frameW * 0.38].forEach((cx) => {
-        const cable = new THREE.Mesh(cableGeo, matChampagneGold);
-        cable.position.set(cx, frameH * 0.5 + cableHeight * 0.5, -0.01);
-        displayGroup.add(cable);
-      });
-    } else if (p.mountStyle === 'timeline_wall') {
-      const stemLen = Math.max(0.2, localY - frameH * 0.5 - 1.38);
-      const stem = new THREE.Mesh(
-        track(new THREE.BoxGeometry(0.025, stemLen, 0.025)),
-        matChampagneGold,
-      );
-      stem.position.set(0, -frameH * 0.5 - stemLen * 0.5, 0.01);
-      displayGroup.add(stem);
-
-      const dateBadgeText = p.chronologicalDateLabel || 'UNDATED';
-      const dateNodeTex = track(
-        createTimelineDateNodeTexture(
-          dateBadgeText,
-          room.accentColor,
-          maxAnisotropy,
-        ),
-      );
-      const dateNodeMesh = new THREE.Mesh(
-        track(new THREE.PlaneGeometry(0.68, 0.22)),
-        track(new THREE.MeshBasicMaterial({ map: dateNodeTex })),
-      );
-      dateNodeMesh.position.set(0, 1.38 - localY, 0.045);
-      displayGroup.add(dateNodeMesh);
-    } else if (p.mountStyle === 'memory_shelves') {
-      const shelfLedge = new THREE.Mesh(
-        track(new THREE.BoxGeometry(frameW + 0.36, 0.06, 0.42)),
-        matWalnut,
-      );
-      shelfLedge.position.set(0, -frameH * 0.5 - 0.1, 0.14);
-      displayGroup.add(shelfLedge);
-
-      const glassFront = new THREE.Mesh(
-        track(new THREE.BoxGeometry(frameW + 0.32, frameH + 0.36, 0.34)),
-        matVitrineGlass,
-      );
-      glassFront.position.set(0, 0.04, 0.12);
-      displayGroup.add(glassFront);
-    } else if (p.mountStyle === 'scrapbook_collage') {
-      const boardMesh = new THREE.Mesh(
-        track(new THREE.BoxGeometry(frameW + 0.34, frameH + 0.52, 0.03)),
-        matWarmLimestone,
-      );
-      boardMesh.position.set(0, -0.08, -0.025);
-      displayGroup.add(boardMesh);
-
-      const pinGeo = track(new THREE.SphereGeometry(0.025, 10, 10));
-      [
-        [-frameW * 0.45, frameH * 0.45],
-        [frameW * 0.45, frameH * 0.45],
-        [-frameW * 0.45, -frameH * 0.45],
-        [frameW * 0.45, -frameH * 0.45],
-      ].forEach(([px, py]) => {
-        const pin = new THREE.Mesh(pinGeo, matChampagneGold);
-        pin.position.set(px, py, 0.045);
-        displayGroup.add(pin);
-      });
-    } else if (p.mountStyle === 'floating_island') {
-      const arm = new THREE.Mesh(
-        track(new THREE.BoxGeometry(0.06, 0.06, 0.65)),
-        matChampagneGold,
-      );
-      arm.position.set(0, 0, -0.34);
-      displayGroup.add(arm);
-    }
-
-    const blueprintEx = exhibitBlueprintMap.get(mem.id);
-    if (blueprintEx) {
-      if (blueprintEx.type === 'vintage-television') {
-        const tvAntennaGeo = track(
-          new THREE.CylinderGeometry(0.006, 0.006, 0.36, 8),
-        );
-        [-0.22, 0.22].forEach((ax) => {
-          const ant = new THREE.Mesh(tvAntennaGeo, matChampagneGold);
-          ant.position.set(ax, frameH * 0.5 + 0.24, 0.02);
-          ant.rotation.z = ax < 0 ? 0.5 : -0.5;
-          displayGroup.add(ant);
-        });
-      } else if (blueprintEx.type === 'interactive-scrapbook') {
-        const ribbon = new THREE.Mesh(
-          track(new THREE.BoxGeometry(0.04, 0.22, 0.015)),
-          matChampagneGold,
-        );
-        ribbon.position.set(frameW * 0.28, -frameH * 0.5 - 0.14, 0.04);
-        displayGroup.add(ribbon);
-      } else if (
-        blueprintEx.type === 'interactive-school-bag' ||
-        blueprintEx.type === 'keepsake-vitrine'
-      ) {
-        const keepsakeShelf = new THREE.Mesh(
-          track(new THREE.BoxGeometry(frameW * 0.72, 0.04, 0.22)),
-          matWalnut,
-        );
-        keepsakeShelf.position.set(0, -frameH * 0.5 - 0.46, 0.09);
-        displayGroup.add(keepsakeShelf);
-      }
-    }
-
-    const hitboxMesh = new THREE.Mesh(
-      track(new THREE.BoxGeometry(frameW + 0.3, frameH + 0.5, 0.35)),
-      track(new THREE.MeshBasicMaterial({ visible: false })),
-    );
-    hitboxMesh.position.set(0, -0.08, 0.06);
-    const bpLabel = blueprintEx
-      ? `${blueprintEx.associated3DObject} · `
-      : '';
-    hitboxMesh.userData = {
-      kind: 'room_memory_display',
-      memoryId: mem.id,
-      memory: mem,
-      roomId: room.id,
-      title: mem.title,
-      exhibitFormatType: blueprintEx?.type || 'framed-photo',
-      associated3DObject: blueprintEx?.associated3DObject || 'Museum Frame',
-      interactionType: blueprintEx?.interaction || 'open-memory',
-      subtitle: `${p.chronologicalDateLabel ? `${p.chronologicalDateLabel} · ` : ''}${bpLabel}Click or press [E] to inspect`,
-    };
-    displayGroup.add(hitboxMesh);
-
-    const baseArtEmissiveIntensity = p.isMainCinemaScreen ? 0.32 : 0.18;
-
-    displayRecords.push({
-      memoryId: mem.id,
-      mesh: displayGroup,
-      title: mem.title,
-      placement: p,
-      rootGroup: displayGroup,
-      hitboxMesh,
-      frameMesh,
-      artMat,
-      picLightMat,
-      haloMat,
-      spotLight: null,
-      baseY: localY,
-      baseArtEmissiveIntensity,
-      videoElement: videoElem,
-      videoTexture: videoTex,
-    });
-  });
-
-  // =========================================================================
-  // 4B. MEMORY-TO-3D RECONSTRUCTION REGISTRY & REAL GLTFLOADER INTEGRATION
-  //     Only spawns 3D objects for memories explicitly approved by the user!
-  // =========================================================================
   const collectAnimatedNodes = (group: THREE.Group) => {
     const wheels: THREE.Object3D[] = [];
     const lanternOrbs: THREE.Object3D[] = [];
@@ -4389,184 +4117,755 @@ export function buildExhibitionRoom3DScene(params: {
     toyGroups: THREE.Object3D[];
   }> = [];
 
-  const approved3DMemories = rawMemories.filter(
-    (m) => !m.hiddenFrom3D && isMemory3DBlueprintApproved(m),
-  );
+  const clearDynamicMemoryDisplays = () => {
+    memoryTo3DObjectsRegistry.forEach((entry) => {
+      disposeMemory3DObject(entry.containerGroup);
+    });
+    memoryTo3DObjectsRegistry.length = 0;
 
-  approved3DMemories.forEach((mem, idx) => {
-    const bp = mem.memoryTo3DBlueprint!;
-    const offsetX = mem.positionOffset?.x || 0;
-    const offsetY = mem.positionOffset?.y || 0;
+    dynamicDisplayVideoElements.forEach((v) => {
+      try {
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+      } catch {
+        // ignore
+      }
+    });
+    dynamicDisplayVideoElements.length = 0;
 
-    // Slight deterministic offset if multiple approved objects share identical default coordinates
-    const slotSpreadX = (idx % 3 === 1 ? 0.65 : idx % 3 === 2 ? -0.65 : 0);
-    const targetX = Math.max(
-      -5.4,
-      Math.min(5.4, bp.position.x + offsetX + (idx > 0 ? slotSpreadX : 0)),
-    );
-    const targetY = Math.max(0.02, bp.position.y + offsetY);
-    const targetZ = Math.max(-5.4, Math.min(5.0, bp.position.z));
-
-    const containerGroup = new THREE.Group();
-    containerGroup.name = `approved_memory_3d_container_${mem.id}`;
-    containerGroup.position.set(targetX, targetY, targetZ);
-    containerGroup.rotation.set(bp.rotation.x, bp.rotation.y, bp.rotation.z);
-    containerGroup.scale.set(bp.scale.x, bp.scale.y, bp.scale.z);
-    rootGroup.add(containerGroup);
-
-    // 1. Immediate synchronous mesh so there is zero empty frame while optional external GLB loads
-    const activeModelGroup = buildProceduralMemory3DMeshGroup(bp);
-    activeModelGroup.position.set(0, 0, 0);
-    containerGroup.add(activeModelGroup);
-
-    const registryEntry = {
-      memoryId: mem.id,
-      containerGroup,
-      loadedModelGroup: activeModelGroup,
-      ...collectAnimatedNodes(activeModelGroup),
-    };
-    memoryTo3DObjectsRegistry.push(registryEntry);
-
-    // 2. Asynchronously load external .glb or cached procedural template cleanly
-    loadMemoryBlueprint3DObject({
-      blueprint: {
-        ...bp,
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
-      },
-      memory: mem,
-    })
-      .then((loaded) => {
-        if (!containerGroup.parent) {
-          disposeMemory3DObject(loaded.group);
-          return;
+    if (dynamicDisplayObstacles.size > 0) {
+      for (let i = cameraObstacleMeshes.length - 1; i >= 0; i--) {
+        if (dynamicDisplayObstacles.has(cameraObstacleMeshes[i])) {
+          cameraObstacleMeshes.splice(i, 1);
         }
-        containerGroup.remove(activeModelGroup);
-        disposeMemory3DObject(activeModelGroup);
-        loaded.group.position.set(0, 0, 0);
-        containerGroup.add(loaded.group);
-        registryEntry.loadedModelGroup = loaded.group;
-        const animNodes = collectAnimatedNodes(loaded.group);
-        registryEntry.wheels = animNodes.wheels;
-        registryEntry.lanternOrbs = animNodes.lanternOrbs;
-        registryEntry.toyGroups = animNodes.toyGroups;
-      })
-      .catch(() => {
-        // Keep initial procedural fallback mesh if async load fails
+      }
+      dynamicDisplayObstacles.clear();
+    }
+
+    while (dynamicDisplaysGroup.children.length > 0) {
+      dynamicDisplaysGroup.remove(dynamicDisplaysGroup.children[0]);
+    }
+
+    dynamicDisplayDisposables.forEach((d) => {
+      try {
+        d.dispose();
+      } catch {
+        // ignore
+      }
+    });
+    dynamicDisplayDisposables.length = 0;
+    displayRecords.length = 0;
+  };
+
+  const rebuildDynamicMemoryDisplays = (nextRawMemories: Memory[]) => {
+    if (isRoomDisposed) return;
+    memoryUpdateGeneration += 1;
+    const capturedGen = memoryUpdateGeneration;
+    clearDynamicMemoryDisplays();
+
+    const safeIncoming = Array.isArray(nextRawMemories) ? nextRawMemories : [];
+    const visibleSection4Memories = safeIncoming.filter((m) => m && !m.hiddenFrom3D);
+    const placements = computeExhibitionPlacements(
+      room,
+      visibleSection4Memories,
+      effectiveStyle,
+    );
+    const zoneSlotCounters: Record<string, number> = {};
+
+    placements.forEach((p, pIdx) => {
+      const mem = p.memory;
+      const zoneKey =
+        mem.curatedZoneId || mem.placementTarget || 'default';
+      const slotInZone = zoneSlotCounters[zoneKey] || 0;
+      zoneSlotCounters[zoneKey] = slotInZone + 1;
+
+      const resolvedPos = resolve3DPlacementPosition(mem, slotInZone, {
+        x: p.x,
+        y: p.y - floorBaseY,
+        z: p.z,
+        rotY: p.rotY,
       });
 
-    // 3. Floating 3D Museum Plaque & AI-Interpretation / Asset Tier Badge above the 3D object
-    const badgeLabel = bp.generatedGlbAssetRef.isAiInterpretation
-      ? 'AI-INTERPRETED 3D KEEPSAKE'
-      : `3D MEMORY OBJECT · ${bp.connectedSpace.replace('_', ' ').toUpperCase()}`;
-    const plaqueTex = track(
-      createMemoryMuseumPlaqueTexture(
-        mem,
-        badgeLabel,
-        room.accentColor,
-        maxAnisotropy,
-      ),
-    );
-    const plaqueMesh = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(1.15, 0.32)),
-      track(
-        new THREE.MeshBasicMaterial({
-          map: plaqueTex,
-          side: THREE.DoubleSide,
+      const targetX = resolvedPos.x;
+      const localY = resolvedPos.y;
+      const targetZ = resolvedPos.z;
+      const targetRotY = resolvedPos.rotY;
+
+      const displayGroup = new THREE.Group();
+      displayGroup.name = `memora_photo_display_${mem.id}`;
+      displayGroup.position.set(targetX, localY, targetZ);
+      displayGroup.rotation.y = targetRotY;
+      // Section 3B already mounts the first 7 memories into the dedicated Memory Wall,
+      // Central Tree Floating Canopy, Scrapbook, Cinema, and Audio zones.
+      // Any memory with an explicit approved placement (curatedZoneId or placementTarget)
+      // or overflow beyond Section 3B mounts cleanly as a physical 3D display at its approved location.
+      const hasExplicitPlacement = Boolean(mem.curatedZoneId || mem.placementTarget);
+      const isAlreadyInSection3B = pIdx < 7 && !hasExplicitPlacement;
+      if (!isAlreadyInSection3B) {
+        dynamicDisplaysGroup.add(displayGroup);
+      }
+
+      // Grounded walnut-and-champagne-brass freestanding easel for outdoor park displays
+      if (resolvedPos.needsEaselStand && !isAlreadyInSection3B) {
+        const standHeight = Math.max(0.55, localY - 0.12);
+        const legGeo = trackDisplay(new THREE.BoxGeometry(0.045, standHeight, 0.045));
+        [-0.32, 0.32].forEach((lx) => {
+          const leg = new THREE.Mesh(legGeo, matWalnut);
+          leg.position.set(lx, -standHeight * 0.5 - 0.08, -0.04);
+          leg.rotation.x = 0.08;
+          displayGroup.add(leg);
+        });
+        const backLeg = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(0.04, standHeight * 1.05, 0.04)),
+          matWalnut,
+        );
+        backLeg.position.set(0, -standHeight * 0.5 - 0.08, -0.26);
+        backLeg.rotation.x = -0.26;
+        displayGroup.add(backLeg);
+        const ledgeBar = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(0.92, 0.04, 0.09)),
+          matChampagneGold,
+        );
+        ledgeBar.position.set(0, -0.58, 0.03);
+        displayGroup.add(ledgeBar);
+      }
+
+      let baseFrameHex: string = '#FFFFFF';
+      let baseFrameRoughness = 0.34;
+      let baseFrameMetalness = 0.06;
+      const isMetallicFrame =
+        p.frameStyle === 'champagne_brass' ||
+        p.frameStyle === 'floating_halo' ||
+        p.frameStyle === 'bronze_museum';
+      const isDarkFrame =
+        p.frameStyle === 'minimal_dark' || p.frameStyle === 'cinema_screen';
+      if (
+        p.frameStyle === 'champagne_brass' ||
+        p.frameStyle === 'floating_halo'
+      ) {
+        baseFrameHex = '#D3AD6E';
+        baseFrameRoughness = 0.28;
+        baseFrameMetalness = 0.84;
+      } else if (p.frameStyle === 'bronze_museum') {
+        baseFrameHex = MUSEUM_LUXURY_PALETTE.bronze;
+        baseFrameRoughness = 0.32;
+        baseFrameMetalness = 0.8;
+      } else if (isDarkFrame) {
+        baseFrameHex = '#1E1A17';
+        baseFrameRoughness = 0.32;
+        baseFrameMetalness = 0.35;
+      }
+
+      const frameMat = trackDisplay(
+        new THREE.MeshPhysicalMaterial({
+          map: isMetallicFrame || isDarkFrame ? null : walnutTex,
+          normalMap: isMetallicFrame
+            ? metalPBR.normalMap
+            : isDarkFrame
+              ? null
+              : woodPBR.normalMap,
+          normalScale: new THREE.Vector2(0.18, 0.18),
+          roughnessMap: isMetallicFrame
+            ? metalPBR.roughnessMap
+            : isDarkFrame
+              ? null
+              : woodPBR.roughnessMap,
+          color: new THREE.Color(baseFrameHex),
+          emissive: new THREE.Color(0x000000),
+          emissiveIntensity: 0,
+          roughness: baseFrameRoughness,
+          metalness: baseFrameMetalness,
+          clearcoat: isMetallicFrame ? 0.22 : isDarkFrame ? 0.12 : 0.16,
+          envMapIntensity: isMetallicFrame ? 0.96 : 0.48,
         }),
-      ),
-    );
-    plaqueMesh.position.set(0, 1.08, 0);
-    containerGroup.add(plaqueMesh);
+      );
 
-    // 4. Raycast & Proximity Hitbox connected to the original uploaded memory
-    const hitboxMesh = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.15, 1.35, 1.15)),
-      track(new THREE.MeshBasicMaterial({ visible: false })),
-    );
-    hitboxMesh.position.set(0, 0.62, 0);
-    hitboxMesh.userData = {
-      kind: 'room_memory_display',
-      memoryId: mem.id,
-      memory: mem,
-      roomId: room.id,
-      title: `${bp.objectName} (${mem.title})`,
-      exhibitFormatType: bp.objectType,
-      associated3DObject: bp.objectName,
-      interactionType: bp.interactionType,
-      isMemoryTo3DObject: true,
-      isAiInterpretation: bp.generatedGlbAssetRef.isAiInterpretation,
-      subtitle: `${bp.generatedGlbAssetRef.isAiInterpretation ? '[AI-Interpreted 3D Object] · ' : ''}${bp.interactionLabel}`,
-    };
-    containerGroup.add(hitboxMesh);
+      const frameW = p.width;
+      const frameH = p.height;
 
-    const proxyFrameMat = track(
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color(MUSEUM_LUXURY_PALETTE.champagneGold),
-        roughness: 0.28,
-        metalness: 0.78,
-      }),
-    );
-    const proxyFrameMesh = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.49, 0.49, 0.02, 24)),
-      proxyFrameMat,
-    );
-    proxyFrameMesh.position.set(0, 0.085, 0);
-    containerGroup.add(proxyFrameMesh);
+      const frameDepth = p.isMainCinemaScreen ? 0.12 : 0.065;
+      const frameMesh = new THREE.Mesh(
+        trackDisplay(new THREE.BoxGeometry(frameW + 0.14, frameH + 0.14, frameDepth)),
+        frameMat,
+      );
+      displayGroup.add(frameMesh);
+      if (!isAlreadyInSection3B) {
+        cameraObstacleMeshes.push(frameMesh);
+        dynamicDisplayObstacles.add(frameMesh);
+      }
 
-    const proxyLightMat = track(
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color('#FFFCF6'),
-        emissive: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
-        emissiveIntensity: 0.85,
-      }),
-    );
-    const proxyHaloMat = track(
-      new THREE.MeshBasicMaterial({
-        color: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
-        transparent: true,
-        opacity: 0.18,
-      }),
-    );
+      if (!p.isMainCinemaScreen) {
+        const matBoard = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(frameW + 0.02, frameH + 0.02, frameDepth + 0.01)),
+          trackDisplay(
+            new THREE.MeshStandardMaterial({
+              color: new THREE.Color(
+                p.mountStyle === 'scrapbook_collage' ? '#EFE4D2' : '#FAF5EC',
+              ),
+              roughness: 0.8,
+            }),
+          ),
+        );
+        matBoard.position.z = 0.006;
+        displayGroup.add(matBoard);
+      }
 
-    displayRecords.push({
-      memoryId: mem.id,
-      mesh: containerGroup,
-      title: mem.title,
-      placement: {
+      const artMat = trackDisplay(
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: new THREE.Color('#FFF4DC'),
+          emissiveIntensity: p.isMainCinemaScreen ? 0.32 : 0.16,
+          roughness: 0.32,
+          metalness: 0.04,
+        }),
+      );
+
+      let videoElem: HTMLVideoElement | null = null;
+      let videoTex: THREE.VideoTexture | null = null;
+      const isVideoMem = (mem.type || mem.mediaType) === 'video';
+      const videoSrc = resolveRoomMemoryVideoUrl(mem);
+
+      // Warm ivory archival museum mat backing so aspect-ratio-fitted photos sit gracefully framed
+      const matBoardW = frameW - 0.1;
+      const matBoardH = frameH - 0.1;
+      const matBoardMesh = new THREE.Mesh(
+        trackDisplay(new THREE.PlaneGeometry(matBoardW, matBoardH)),
+        trackDisplay(
+          new THREE.MeshStandardMaterial({
+            color: new THREE.Color('#F5EDE0'),
+            roughness: 0.9,
+            metalness: 0.02,
+          }),
+        ),
+      );
+      matBoardMesh.position.z = frameDepth * 0.5 + 0.006;
+      displayGroup.add(matBoardMesh);
+
+      const artPlaneMaxW = frameW - 0.16;
+      const artPlaneMaxH = frameH - 0.16;
+      const artPlane = new THREE.Mesh(
+        trackDisplay(new THREE.PlaneGeometry(artPlaneMaxW, artPlaneMaxH)),
+        artMat,
+      );
+      artPlane.position.z = frameDepth * 0.5 + 0.014;
+      displayGroup.add(artPlane);
+
+      const bindBoundedDisplayImage = (imgDataUrl: string, fallbackArtUrl: string) => {
+        if (typeof Image === 'undefined') return;
+        const img = new Image();
+        if (/^https?:\/\//i.test(imgDataUrl)) {
+          img.crossOrigin = 'anonymous';
+        }
+        img.onload = () => {
+          if (isRoomDisposed || capturedGen !== memoryUpdateGeneration) {
+            return;
+          }
+          const { canvas, natW, natH } = createBoundedCanvasFromImage(
+            img,
+            MAX_3D_DISPLAY_TEXTURE_DIM,
+          );
+          const imgAspect = natW / natH;
+          const boxAspect = artPlaneMaxW / artPlaneMaxH;
+          if (imgAspect > boxAspect) {
+            artPlane.scale.set(1, Math.max(0.28, boxAspect / imgAspect), 1);
+          } else {
+            artPlane.scale.set(Math.max(0.28, imgAspect / boxAspect), 1, 1);
+          }
+          const boundedTex = trackDisplay(new THREE.CanvasTexture(canvas));
+          boundedTex.colorSpace = THREE.SRGBColorSpace;
+          boundedTex.anisotropy = maxAnisotropy;
+          boundedTex.minFilter = THREE.LinearMipmapLinearFilter;
+          boundedTex.magFilter = THREE.LinearFilter;
+          boundedTex.generateMipmaps = true;
+          boundedTex.needsUpdate = true;
+          artMat.map = boundedTex;
+          artMat.emissiveMap = boundedTex;
+          artMat.needsUpdate = true;
+        };
+        img.onerror = () => {
+          if (isRoomDisposed || capturedGen !== memoryUpdateGeneration) {
+            return;
+          }
+          if (img.src !== fallbackArtUrl) {
+            img.src = fallbackArtUrl;
+          }
+        };
+        img.src = imgDataUrl;
+      };
+
+      const fallbackArtUrl = getProceduralMemoryArt(
+        mem.motif,
+        mem.palette,
+        mem.title,
+        mem.location,
+      );
+
+      if (
+        isVideoMem &&
+        p.isMainCinemaScreen &&
+        videoSrc &&
+        typeof document !== 'undefined'
+      ) {
+        // Bind poster / procedural image immediately so frame 0 is never a broken video texture
+        const posterUrl = resolveRoomMemoryImageUrl(mem) || fallbackArtUrl;
+        bindBoundedDisplayImage(posterUrl, fallbackArtUrl);
+
+        videoElem = document.createElement('video');
+        if (/^https?:\/\//i.test(videoSrc)) {
+          videoElem.crossOrigin = 'anonymous';
+        }
+        videoElem.muted = true;
+        videoElem.loop = true;
+        videoElem.playsInline = true;
+        videoElem.preload = 'metadata';
+        dynamicDisplayVideoElements.push(videoElem);
+
+        const activeVid = videoElem;
+        activeVid.addEventListener(
+          'loadeddata',
+          () => {
+            if (
+              isRoomDisposed ||
+              capturedGen !== memoryUpdateGeneration ||
+              activeVid.readyState < 2 ||
+              activeVid.videoWidth <= 0
+            ) {
+              return;
+            }
+            const readyTex = trackDisplay(new THREE.VideoTexture(activeVid));
+            readyTex.colorSpace = THREE.SRGBColorSpace;
+            readyTex.minFilter = THREE.LinearFilter;
+            readyTex.magFilter = THREE.LinearFilter;
+            readyTex.generateMipmaps = false;
+            videoTex = readyTex;
+            artMat.map = readyTex;
+            artMat.emissiveMap = readyTex;
+            artMat.needsUpdate = true;
+          },
+          { once: true },
+        );
+        activeVid.addEventListener(
+          'error',
+          () => {
+            // Retain poster/procedural art safely on video load error
+          },
+          { once: true },
+        );
+        activeVid.src = videoSrc;
+        activeVid.play().catch(() => {
+          // Fallback if browser blocks even muted playback
+        });
+      } else {
+        const candidateImgUrl = resolveRoomMemoryImageUrl(mem);
+        const imgDataUrl = candidateImgUrl || fallbackArtUrl;
+        bindBoundedDisplayImage(imgDataUrl, fallbackArtUrl);
+      }
+
+      // Subtle champagne-brass corner medallion indicates an interactive placed photograph
+      if (mem.customImageUrl || mem.curatedZoneId) {
+        const badgeDot = new THREE.Mesh(
+          trackDisplay(new THREE.CylinderGeometry(0.036, 0.036, 0.014, 14)),
+          matChampagneGold,
+        );
+        badgeDot.rotation.x = Math.PI / 2;
+        badgeDot.position.set(
+          frameW * 0.5 - 0.06,
+          -frameH * 0.5 + 0.06,
+          frameDepth * 0.5 + 0.02,
+        );
+        displayGroup.add(badgeDot);
+      }
+
+      const haloMat = trackDisplay(
+        new THREE.MeshBasicMaterial({
+          color: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
+          transparent: true,
+          opacity:
+            p.mountStyle === 'floating_exhibition' || p.isMainCinemaScreen
+              ? 0.24
+              : 0.06,
+          depthWrite: false,
+        }),
+      );
+      const haloMesh = new THREE.Mesh(
+        trackDisplay(new THREE.PlaneGeometry(frameW + 0.42, frameH + 0.42)),
+        haloMat,
+      );
+      haloMesh.position.z = -frameDepth * 0.5 - 0.015;
+      displayGroup.add(haloMesh);
+
+      const picHoodW = Math.min(0.68, frameW * 0.45);
+      const picHood = new THREE.Mesh(
+        trackDisplay(new THREE.BoxGeometry(picHoodW, 0.04, 0.09)),
+        matChampagneGold,
+      );
+      picHood.position.set(0, frameH * 0.5 + 0.12, 0.06);
+      displayGroup.add(picHood);
+
+      const picLightMat = trackDisplay(
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#FFFCF6'),
+          emissive: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
+          emissiveIntensity: 0.9,
+          roughness: 0.2,
+        }),
+      );
+      const picLightLens = new THREE.Mesh(
+        trackDisplay(new THREE.BoxGeometry(picHoodW * 0.86, 0.018, 0.055)),
+        picLightMat,
+      );
+      picLightLens.position.set(0, frameH * 0.5 + 0.1, 0.065);
+      displayGroup.add(picLightLens);
+
+      const plaqueTex = trackDisplay(
+        createMemoryMuseumPlaqueTexture(
+          mem,
+          p.chronologicalDateLabel,
+          room.accentColor,
+          maxAnisotropy,
+        ),
+      );
+      const plaqueMesh = new THREE.Mesh(
+        trackDisplay(new THREE.PlaneGeometry(Math.min(1.32, frameW * 0.85), 0.34)),
+        trackDisplay(new THREE.MeshBasicMaterial({ map: plaqueTex })),
+      );
+      plaqueMesh.position.set(0, -frameH * 0.5 - 0.26, 0.035);
+      displayGroup.add(plaqueMesh);
+
+      if (p.mountStyle === 'floating_exhibition') {
+        const cableHeight = Math.max(0.5, roomH - localY - frameH * 0.5);
+        const cableGeo = trackDisplay(
+          new THREE.CylinderGeometry(0.008, 0.008, cableHeight, 8),
+        );
+        [-frameW * 0.38, frameW * 0.38].forEach((cx) => {
+          const cable = new THREE.Mesh(cableGeo, matChampagneGold);
+          cable.position.set(cx, frameH * 0.5 + cableHeight * 0.5, -0.01);
+          displayGroup.add(cable);
+        });
+      } else if (p.mountStyle === 'timeline_wall') {
+        const stemLen = Math.max(0.2, localY - frameH * 0.5 - 1.38);
+        const stem = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(0.025, stemLen, 0.025)),
+          matChampagneGold,
+        );
+        stem.position.set(0, -frameH * 0.5 - stemLen * 0.5, 0.01);
+        displayGroup.add(stem);
+
+        const dateBadgeText = p.chronologicalDateLabel || 'UNDATED';
+        const dateNodeTex = trackDisplay(
+          createTimelineDateNodeTexture(
+            dateBadgeText,
+            room.accentColor,
+            maxAnisotropy,
+          ),
+        );
+        const dateNodeMesh = new THREE.Mesh(
+          trackDisplay(new THREE.PlaneGeometry(0.68, 0.22)),
+          trackDisplay(new THREE.MeshBasicMaterial({ map: dateNodeTex })),
+        );
+        dateNodeMesh.position.set(0, 1.38 - localY, 0.045);
+        displayGroup.add(dateNodeMesh);
+      } else if (p.mountStyle === 'memory_shelves') {
+        const shelfLedge = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(frameW + 0.36, 0.06, 0.42)),
+          matWalnut,
+        );
+        shelfLedge.position.set(0, -frameH * 0.5 - 0.1, 0.14);
+        displayGroup.add(shelfLedge);
+
+        const glassFront = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(frameW + 0.32, frameH + 0.36, 0.34)),
+          matVitrineGlass,
+        );
+        glassFront.position.set(0, 0.04, 0.12);
+        displayGroup.add(glassFront);
+      } else if (p.mountStyle === 'scrapbook_collage') {
+        const boardMesh = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(frameW + 0.34, frameH + 0.52, 0.03)),
+          matWarmLimestone,
+        );
+        boardMesh.position.set(0, -0.08, -0.025);
+        displayGroup.add(boardMesh);
+
+        const pinGeo = trackDisplay(new THREE.SphereGeometry(0.025, 10, 10));
+        [
+          [-frameW * 0.45, frameH * 0.45],
+          [frameW * 0.45, frameH * 0.45],
+          [-frameW * 0.45, -frameH * 0.45],
+          [frameW * 0.45, -frameH * 0.45],
+        ].forEach(([px, py]) => {
+          const pin = new THREE.Mesh(pinGeo, matChampagneGold);
+          pin.position.set(px, py, 0.045);
+          displayGroup.add(pin);
+        });
+      } else if (p.mountStyle === 'floating_island') {
+        const arm = new THREE.Mesh(
+          trackDisplay(new THREE.BoxGeometry(0.06, 0.06, 0.65)),
+          matChampagneGold,
+        );
+        arm.position.set(0, 0, -0.34);
+        displayGroup.add(arm);
+      }
+
+      const blueprintEx = exhibitBlueprintMap.get(mem.id);
+      if (blueprintEx) {
+        if (blueprintEx.type === 'vintage-television') {
+          const tvAntennaGeo = trackDisplay(
+            new THREE.CylinderGeometry(0.006, 0.006, 0.36, 8),
+          );
+          [-0.22, 0.22].forEach((ax) => {
+            const ant = new THREE.Mesh(tvAntennaGeo, matChampagneGold);
+            ant.position.set(ax, frameH * 0.5 + 0.24, 0.02);
+            ant.rotation.z = ax < 0 ? 0.5 : -0.5;
+            displayGroup.add(ant);
+          });
+        } else if (blueprintEx.type === 'interactive-scrapbook') {
+          const ribbon = new THREE.Mesh(
+            trackDisplay(new THREE.BoxGeometry(0.04, 0.22, 0.015)),
+            matChampagneGold,
+          );
+          ribbon.position.set(frameW * 0.28, -frameH * 0.5 - 0.14, 0.04);
+          displayGroup.add(ribbon);
+        } else if (
+          blueprintEx.type === 'interactive-school-bag' ||
+          blueprintEx.type === 'keepsake-vitrine'
+        ) {
+          const keepsakeShelf = new THREE.Mesh(
+            trackDisplay(new THREE.BoxGeometry(frameW * 0.72, 0.04, 0.22)),
+            matWalnut,
+          );
+          keepsakeShelf.position.set(0, -frameH * 0.5 - 0.46, 0.09);
+          displayGroup.add(keepsakeShelf);
+        }
+      }
+
+      const hitboxMesh = new THREE.Mesh(
+        trackDisplay(new THREE.BoxGeometry(frameW + 0.3, frameH + 0.5, 0.35)),
+        trackDisplay(new THREE.MeshBasicMaterial({ visible: false })),
+      );
+      hitboxMesh.position.set(0, -0.08, 0.06);
+      const bpLabel = blueprintEx
+        ? `${blueprintEx.associated3DObject} · `
+        : '';
+      hitboxMesh.userData = {
+        kind: 'room_memory_display',
         memoryId: mem.id,
         memory: mem,
-        index: idx,
-        mountStyle: 'floating_island',
-        frameStyle: 'champagne_brass',
-        x: targetX,
-        y: floorBaseY + targetY + 0.55,
-        z: targetZ,
-        rotY: bp.rotation.y,
-        width: 0.95,
-        height: 0.95,
-        normalX: Math.sin(bp.rotation.y),
-        normalZ: Math.cos(bp.rotation.y),
-        interactionX: targetX,
-        interactionZ: targetZ,
-        interactionRadius: 2.35,
-        chronologicalDateLabel: badgeLabel,
-        isUndated: !mem.date,
-      },
-      rootGroup: containerGroup,
-      hitboxMesh,
-      frameMesh: proxyFrameMesh,
-      artMat: proxyLightMat,
-      picLightMat: proxyLightMat,
-      haloMat: proxyHaloMat,
-      spotLight: null,
-      baseY: targetY,
-      baseArtEmissiveIntensity: 0.85,
-      videoElement: null,
-      videoTexture: null,
+        roomId: room.id,
+        title: mem.title,
+        exhibitFormatType: blueprintEx?.type || 'framed-photo',
+        associated3DObject: blueprintEx?.associated3DObject || 'Museum Frame',
+        interactionType: blueprintEx?.interaction || 'open-memory',
+        subtitle: `${p.chronologicalDateLabel ? `${p.chronologicalDateLabel} · ` : ''}${bpLabel}Click or press [E] to inspect`,
+      };
+      displayGroup.add(hitboxMesh);
+
+      const baseArtEmissiveIntensity = p.isMainCinemaScreen ? 0.32 : 0.18;
+
+      displayRecords.push({
+        memoryId: mem.id,
+        mesh: displayGroup,
+        title: mem.title,
+        placement: p,
+        rootGroup: displayGroup,
+        hitboxMesh,
+        frameMesh,
+        artMat,
+        picLightMat,
+        haloMat,
+        spotLight: null,
+        baseY: localY,
+        baseArtEmissiveIntensity,
+        videoElement: videoElem,
+        videoTexture: videoTex,
+      });
     });
-  });
+
+    // =======================================================================
+    // 4B. MEMORY-TO-3D RECONSTRUCTION REGISTRY & REAL GLTFLOADER INTEGRATION
+    //     Only spawns 3D objects for memories explicitly approved by the user!
+    // =======================================================================
+    const approved3DMemories = safeIncoming.filter(
+      (m) => m && !m.hiddenFrom3D && isMemory3DBlueprintApproved(m),
+    );
+
+    approved3DMemories.forEach((mem, idx) => {
+      const bp = mem.memoryTo3DBlueprint!;
+      const offsetX = mem.positionOffset?.x || 0;
+      const offsetY = mem.positionOffset?.y || 0;
+
+      const slotSpreadX = idx % 3 === 1 ? 0.65 : idx % 3 === 2 ? -0.65 : 0;
+      const targetX = Math.max(
+        -5.4,
+        Math.min(5.4, bp.position.x + offsetX + (idx > 0 ? slotSpreadX : 0)),
+      );
+      const targetY = Math.max(0.02, bp.position.y + offsetY);
+      const targetZ = Math.max(-5.4, Math.min(5.0, bp.position.z));
+
+      const containerGroup = new THREE.Group();
+      containerGroup.name = `approved_memory_3d_container_${mem.id}`;
+      containerGroup.position.set(targetX, targetY, targetZ);
+      containerGroup.rotation.set(bp.rotation.x, bp.rotation.y, bp.rotation.z);
+      containerGroup.scale.set(bp.scale.x, bp.scale.y, bp.scale.z);
+      dynamicDisplaysGroup.add(containerGroup);
+
+      const activeModelGroup = buildProceduralMemory3DMeshGroup(bp);
+      activeModelGroup.position.set(0, 0, 0);
+      containerGroup.add(activeModelGroup);
+
+      const registryEntry = {
+        memoryId: mem.id,
+        containerGroup,
+        loadedModelGroup: activeModelGroup,
+        ...collectAnimatedNodes(activeModelGroup),
+      };
+      memoryTo3DObjectsRegistry.push(registryEntry);
+
+      loadMemoryBlueprint3DObject({
+        blueprint: {
+          ...bp,
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        memory: mem,
+      })
+        .then((loaded) => {
+          if (
+            isRoomDisposed ||
+            capturedGen !== memoryUpdateGeneration ||
+            !containerGroup.parent
+          ) {
+            disposeMemory3DObject(loaded.group);
+            return;
+          }
+          containerGroup.remove(activeModelGroup);
+          disposeMemory3DObject(activeModelGroup);
+          loaded.group.position.set(0, 0, 0);
+          containerGroup.add(loaded.group);
+          registryEntry.loadedModelGroup = loaded.group;
+          const animNodes = collectAnimatedNodes(loaded.group);
+          registryEntry.wheels = animNodes.wheels;
+          registryEntry.lanternOrbs = animNodes.lanternOrbs;
+          registryEntry.toyGroups = animNodes.toyGroups;
+        })
+        .catch(() => {
+          // Keep initial procedural fallback mesh if async load fails
+        });
+
+      const badgeLabel = bp.generatedGlbAssetRef.isAiInterpretation
+        ? 'AI-INTERPRETED 3D KEEPSAKE'
+        : `3D MEMORY OBJECT · ${bp.connectedSpace.replace('_', ' ').toUpperCase()}`;
+      const plaqueTex = trackDisplay(
+        createMemoryMuseumPlaqueTexture(
+          mem,
+          badgeLabel,
+          room.accentColor,
+          maxAnisotropy,
+        ),
+      );
+      const plaqueMesh = new THREE.Mesh(
+        trackDisplay(new THREE.PlaneGeometry(1.15, 0.32)),
+        trackDisplay(
+          new THREE.MeshBasicMaterial({
+            map: plaqueTex,
+            side: THREE.DoubleSide,
+          }),
+        ),
+      );
+      plaqueMesh.position.set(0, 1.08, 0);
+      containerGroup.add(plaqueMesh);
+
+      const hitboxMesh = new THREE.Mesh(
+        trackDisplay(new THREE.BoxGeometry(1.15, 1.35, 1.15)),
+        trackDisplay(new THREE.MeshBasicMaterial({ visible: false })),
+      );
+      hitboxMesh.position.set(0, 0.62, 0);
+      hitboxMesh.userData = {
+        kind: 'room_memory_display',
+        memoryId: mem.id,
+        memory: mem,
+        roomId: room.id,
+        title: `${bp.objectName} (${mem.title})`,
+        exhibitFormatType: bp.objectType,
+        associated3DObject: bp.objectName,
+        interactionType: bp.interactionType,
+        isMemoryTo3DObject: true,
+        isAiInterpretation: bp.generatedGlbAssetRef.isAiInterpretation,
+        subtitle: `${bp.generatedGlbAssetRef.isAiInterpretation ? '[AI-Interpreted 3D Object] · ' : ''}${bp.interactionLabel}`,
+      };
+      containerGroup.add(hitboxMesh);
+
+      const proxyFrameMat = trackDisplay(
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color(MUSEUM_LUXURY_PALETTE.champagneGold),
+          roughness: 0.28,
+          metalness: 0.78,
+        }),
+      );
+      const proxyFrameMesh = new THREE.Mesh(
+        trackDisplay(new THREE.CylinderGeometry(0.49, 0.49, 0.02, 24)),
+        proxyFrameMat,
+      );
+      proxyFrameMesh.position.set(0, 0.085, 0);
+      containerGroup.add(proxyFrameMesh);
+
+      const proxyLightMat = trackDisplay(
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#FFFCF6'),
+          emissive: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
+          emissiveIntensity: 0.85,
+        }),
+      );
+      const proxyHaloMat = trackDisplay(
+        new THREE.MeshBasicMaterial({
+          color: new THREE.Color(MUSEUM_LUXURY_PALETTE.warmAmberLight),
+          transparent: true,
+          opacity: 0.18,
+        }),
+      );
+
+      displayRecords.push({
+        memoryId: mem.id,
+        mesh: containerGroup,
+        title: mem.title,
+        placement: {
+          memoryId: mem.id,
+          memory: mem,
+          index: idx,
+          mountStyle: 'floating_island',
+          frameStyle: 'champagne_brass',
+          x: targetX,
+          y: floorBaseY + targetY + 0.55,
+          z: targetZ,
+          rotY: bp.rotation.y,
+          width: 0.95,
+          height: 0.95,
+          normalX: Math.sin(bp.rotation.y),
+          normalZ: Math.cos(bp.rotation.y),
+          interactionX: targetX,
+          interactionZ: targetZ,
+          interactionRadius: 2.35,
+          chronologicalDateLabel: badgeLabel,
+          isUndated: !mem.date,
+        },
+        rootGroup: containerGroup,
+        hitboxMesh,
+        frameMesh: proxyFrameMesh,
+        artMat: proxyLightMat,
+        picLightMat: proxyLightMat,
+        haloMat: proxyHaloMat,
+        spotLight: null,
+        baseY: targetY,
+        baseArtEmissiveIntensity: 0.85,
+        videoElement: null,
+        videoTexture: null,
+      });
+    });
+  };
+
+  rebuildDynamicMemoryDisplays(rawMemories);
 
   // Smooth Room-Entrance Animation Updater (0.5s – 1.2s)
   // =========================================================================
@@ -7685,11 +7984,45 @@ export function buildExhibitionRoom3DScene(params: {
     }
   };
 
-  const cleanup = () => {
-    memoryTo3DObjectsRegistry.forEach((entry) => {
-      disposeMemory3DObject(entry.containerGroup);
+  const updateMemories = (nextMemories: Memory[]) => {
+    if (isRoomDisposed) return;
+    const safeList = Array.isArray(nextMemories) ? nextMemories : [];
+    const nextUploaded = safeList.filter((m) => m && !m.hiddenFrom3D);
+    const nextDefault = nextUploaded[0];
+
+    rebuildDynamicMemoryDisplays(safeList);
+    section3BMemoryUpdaters.forEach((updater) => {
+      try {
+        updater(nextUploaded, nextDefault);
+      } catch {
+        // Keep room stable even if a single display updater encounters malformed media
+      }
     });
-    memoryTo3DObjectsRegistry.length = 0;
+    bedroomInteractions.updateMemories(safeList);
+  };
+
+  const cleanup = () => {
+    isRoomDisposed = true;
+    memoryUpdateGeneration += 1;
+    clearDynamicMemoryDisplays();
+    section3BCinemaVideos.forEach((v) => {
+      try {
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+      } catch {
+        // ignore
+      }
+    });
+    section3BCinemaVideos.length = 0;
+    section3BDynamicTextures.forEach((tex) => {
+      try {
+        tex.dispose();
+      } catch {
+        // ignore
+      }
+    });
+    section3BDynamicTextures.clear();
     activeVideoElements.forEach((v) => {
       try {
         v.pause();
@@ -7744,6 +8077,7 @@ export function buildExhibitionRoom3DScene(params: {
     exitArchHitbox,
     applyEntranceAnimation,
     updateAmbientAnimations,
+    updateMemories,
     triggerInteractiveObject,
     setAtmospherePreset,
     getAtmospherePreset,

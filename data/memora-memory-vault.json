@@ -1,0 +1,422 @@
+{
+  "users": {
+    "guest_a1405fa610e81b41": {
+      "http-photo-1": {
+        "id": "http-photo-1",
+        "roomId": "childhood",
+        "title": "Persisted Photo",
+        "subtitle": "Cupboard & Photo Display",
+        "description": "Uploaded photo Persisted Photo",
+        "date": "2004",
+        "year": 2004,
+        "type": "image",
+        "mediaType": "image",
+        "customImageUrl": "/api/storage/media/http-photo-1",
+        "mediaUrl": "/api/storage/media/http-photo-1",
+        "mediaMimeType": "image/png",
+        "mediaFileName": "http-photo-1.png",
+        "motif": "archway",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "cupboard_photos",
+        "linkedObjectId": "cupboard_photos",
+        "userId": "guest_a1405fa610e81b41",
+        "ownerId": "guest_a1405fa610e81b41",
+        "storedMediaFile": {
+          "relativePath": "guest_a1405fa610e81b41/http-photo-1.png",
+          "mimeType": "image/png",
+          "sizeBytes": 70
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "photograph",
+            "mimeType": "image/png",
+            "urlOrRef": "/api/storage/media/http-photo-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:41:30.841Z"
+      }
+    },
+    "guest_8f3d81ce69d50b25": {
+      "http-photo-1": {
+        "id": "http-photo-1",
+        "roomId": "childhood",
+        "title": "Persisted Photo",
+        "subtitle": "Cupboard & Photo Display",
+        "description": "Uploaded photo Persisted Photo",
+        "date": "2004",
+        "year": 2004,
+        "type": "image",
+        "mediaType": "image",
+        "customImageUrl": "/api/storage/media/http-photo-1",
+        "mediaUrl": "/api/storage/media/http-photo-1",
+        "mediaMimeType": "image/png",
+        "mediaFileName": "http-photo-1.png",
+        "motif": "archway",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "cupboard_photos",
+        "linkedObjectId": "cupboard_photos",
+        "userId": "guest_8f3d81ce69d50b25",
+        "ownerId": "guest_8f3d81ce69d50b25",
+        "storedMediaFile": {
+          "relativePath": "guest_8f3d81ce69d50b25/http-photo-1.png",
+          "mimeType": "image/png",
+          "sizeBytes": 70
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "photograph",
+            "mimeType": "image/png",
+            "urlOrRef": "/api/storage/media/http-photo-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:51:34.723Z"
+      },
+      "http-video-1": {
+        "id": "http-video-1",
+        "roomId": "childhood",
+        "title": "Persisted Video",
+        "subtitle": "Projector Reel",
+        "description": "Uploaded video Persisted Video",
+        "date": "2005",
+        "year": 2005,
+        "type": "video",
+        "mediaType": "video",
+        "mediaUrl": "/api/storage/media/http-video-1",
+        "mediaMimeType": "video/mp4",
+        "mediaFileName": "http-video-1.mp4",
+        "motif": "cinema",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "projector_desk",
+        "linkedObjectId": "projector_desk",
+        "userId": "guest_8f3d81ce69d50b25",
+        "ownerId": "guest_8f3d81ce69d50b25",
+        "storedMediaFile": {
+          "relativePath": "guest_8f3d81ce69d50b25/http-video-1.mp4",
+          "mimeType": "video/mp4",
+          "sizeBytes": 24
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "video",
+            "mimeType": "video/mp4",
+            "urlOrRef": "/api/storage/media/http-video-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:51:34.728Z"
+      },
+      "http-audio-1": {
+        "id": "http-audio-1",
+        "roomId": "travel-wing",
+        "title": "Persisted Travel Track",
+        "subtitle": "Radio Track",
+        "description": "Uploaded track Persisted Travel Track",
+        "date": "2006",
+        "year": 2006,
+        "type": "audio",
+        "mediaType": "audio",
+        "mediaUrl": "/api/storage/media/http-audio-1",
+        "mediaMimeType": "audio/mpeg",
+        "mediaFileName": "http-audio-1.mp3",
+        "motif": "music",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "radio_bookshelf",
+        "linkedObjectId": "radio_bookshelf",
+        "userId": "guest_8f3d81ce69d50b25",
+        "ownerId": "guest_8f3d81ce69d50b25",
+        "storedMediaFile": {
+          "relativePath": "guest_8f3d81ce69d50b25/http-audio-1.mp3",
+          "mimeType": "audio/mpeg",
+          "sizeBytes": 45
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "audio",
+            "mimeType": "audio/mpeg",
+            "urlOrRef": "/api/storage/media/http-audio-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:51:34.733Z"
+      }
+    },
+    "guest_446f0f8c42f37d93": {
+      "http-photo-1": {
+        "id": "http-photo-1",
+        "roomId": "childhood",
+        "title": "Persisted Photo",
+        "subtitle": "Cupboard & Photo Display",
+        "description": "Uploaded photo Persisted Photo",
+        "date": "2004",
+        "year": 2004,
+        "type": "image",
+        "mediaType": "image",
+        "customImageUrl": "/api/storage/media/http-photo-1",
+        "mediaUrl": "/api/storage/media/http-photo-1",
+        "mediaMimeType": "image/png",
+        "mediaFileName": "http-photo-1.png",
+        "motif": "archway",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "cupboard_photos",
+        "linkedObjectId": "cupboard_photos",
+        "userId": "guest_446f0f8c42f37d93",
+        "ownerId": "guest_446f0f8c42f37d93",
+        "storedMediaFile": {
+          "relativePath": "guest_446f0f8c42f37d93/http-photo-1.png",
+          "mimeType": "image/png",
+          "sizeBytes": 70
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "photograph",
+            "mimeType": "image/png",
+            "urlOrRef": "/api/storage/media/http-photo-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:52:48.838Z"
+      },
+      "http-video-1": {
+        "id": "http-video-1",
+        "roomId": "childhood",
+        "title": "Persisted Video",
+        "subtitle": "Projector Reel",
+        "description": "Uploaded video Persisted Video",
+        "date": "2005",
+        "year": 2005,
+        "type": "video",
+        "mediaType": "video",
+        "mediaUrl": "/api/storage/media/http-video-1",
+        "mediaMimeType": "video/mp4",
+        "mediaFileName": "http-video-1.mp4",
+        "motif": "cinema",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "projector_desk",
+        "linkedObjectId": "projector_desk",
+        "userId": "guest_446f0f8c42f37d93",
+        "ownerId": "guest_446f0f8c42f37d93",
+        "storedMediaFile": {
+          "relativePath": "guest_446f0f8c42f37d93/http-video-1.mp4",
+          "mimeType": "video/mp4",
+          "sizeBytes": 24
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "video",
+            "mimeType": "video/mp4",
+            "urlOrRef": "/api/storage/media/http-video-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:52:48.845Z"
+      },
+      "http-audio-1": {
+        "id": "http-audio-1",
+        "roomId": "travel-wing",
+        "title": "Persisted Travel Track",
+        "subtitle": "Radio Track",
+        "description": "Uploaded track Persisted Travel Track",
+        "date": "2006",
+        "year": 2006,
+        "type": "audio",
+        "mediaType": "audio",
+        "mediaUrl": "/api/storage/media/http-audio-1",
+        "mediaMimeType": "audio/mpeg",
+        "mediaFileName": "http-audio-1.mp3",
+        "motif": "music",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "radio_bookshelf",
+        "linkedObjectId": "radio_bookshelf",
+        "userId": "guest_446f0f8c42f37d93",
+        "ownerId": "guest_446f0f8c42f37d93",
+        "storedMediaFile": {
+          "relativePath": "guest_446f0f8c42f37d93/http-audio-1.mp3",
+          "mimeType": "audio/mpeg",
+          "sizeBytes": 45
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "audio",
+            "mimeType": "audio/mpeg",
+            "urlOrRef": "/api/storage/media/http-audio-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:52:48.850Z"
+      }
+    },
+    "guest_2d4c861f7b8735d6": {
+      "http-photo-1": {
+        "id": "http-photo-1",
+        "roomId": "childhood",
+        "title": "Persisted Photo",
+        "subtitle": "Cupboard & Photo Display",
+        "description": "Uploaded photo Persisted Photo",
+        "story": "Uploaded photo Persisted Photo",
+        "date": "2004",
+        "year": 2004,
+        "location": "",
+        "category": "Photo",
+        "accessionNumber": "MEM-http-photo-1",
+        "tags": [],
+        "type": "image",
+        "mediaType": "image",
+        "customImageUrl": "/api/storage/media/http-photo-1",
+        "mediaUrl": "/api/storage/media/http-photo-1",
+        "mediaMimeType": "image/png",
+        "mediaFileName": "http-photo-1.png",
+        "motif": "archway",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "cupboard_photos",
+        "linkedObjectId": "cupboard_photos",
+        "userId": "guest_2d4c861f7b8735d6",
+        "ownerId": "guest_2d4c861f7b8735d6",
+        "storedMediaFile": {
+          "relativePath": "guest_2d4c861f7b8735d6/http-photo-1.png",
+          "mimeType": "image/png",
+          "sizeBytes": 70
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "photograph",
+            "mimeType": "image/png",
+            "urlOrRef": "/api/storage/media/http-photo-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:55:52.328Z"
+      },
+      "http-video-1": {
+        "id": "http-video-1",
+        "roomId": "childhood",
+        "title": "Persisted Video",
+        "subtitle": "Projector Reel",
+        "description": "Uploaded video Persisted Video",
+        "story": "Uploaded video Persisted Video",
+        "date": "2005",
+        "year": 2005,
+        "location": "",
+        "category": "Video",
+        "accessionNumber": "MEM-http-video-1",
+        "tags": [],
+        "type": "video",
+        "mediaType": "video",
+        "mediaUrl": "/api/storage/media/http-video-1",
+        "mediaMimeType": "video/mp4",
+        "mediaFileName": "http-video-1.mp4",
+        "motif": "cinema",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "projector_desk",
+        "linkedObjectId": "projector_desk",
+        "userId": "guest_2d4c861f7b8735d6",
+        "ownerId": "guest_2d4c861f7b8735d6",
+        "storedMediaFile": {
+          "relativePath": "guest_2d4c861f7b8735d6/http-video-1.mp4",
+          "mimeType": "video/mp4",
+          "sizeBytes": 24
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "video",
+            "mimeType": "video/mp4",
+            "urlOrRef": "/api/storage/media/http-video-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:55:52.335Z"
+      },
+      "http-audio-1": {
+        "id": "http-audio-1",
+        "roomId": "travel-wing",
+        "title": "Persisted Travel Track",
+        "subtitle": "Radio Track",
+        "description": "Uploaded track Persisted Travel Track",
+        "story": "Uploaded track Persisted Travel Track",
+        "date": "2006",
+        "year": 2006,
+        "location": "",
+        "category": "Audio",
+        "accessionNumber": "MEM-http-audio-1",
+        "tags": [],
+        "type": "audio",
+        "mediaType": "audio",
+        "mediaUrl": "/api/storage/media/http-audio-1",
+        "mediaMimeType": "audio/mpeg",
+        "mediaFileName": "http-audio-1.mp3",
+        "motif": "music",
+        "palette": [
+          "#F5E6C8",
+          "#E7C896",
+          "#854D27",
+          "#27231F"
+        ],
+        "hiddenFrom3D": false,
+        "placementTarget": "radio_bookshelf",
+        "linkedObjectId": "radio_bookshelf",
+        "userId": "guest_2d4c861f7b8735d6",
+        "ownerId": "guest_2d4c861f7b8735d6",
+        "storedMediaFile": {
+          "relativePath": "guest_2d4c861f7b8735d6/http-audio-1.mp3",
+          "mimeType": "audio/mpeg",
+          "sizeBytes": 45
+        },
+        "mediaAssets": [
+          {
+            "assetCategory": "audio",
+            "mimeType": "audio/mpeg",
+            "urlOrRef": "/api/storage/media/http-audio-1"
+          }
+        ],
+        "updatedAt": "2026-11-27T10:55:52.341Z"
+      }
+    }
+  },
+  "curation": {}
+}

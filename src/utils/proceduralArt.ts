@@ -17,7 +17,16 @@ export function getProceduralMemoryArt(
   title: string,
   location?: string,
 ): string {
-  const cacheKey = `${motif}_${palette.join('_')}_${title}`;
+  const safePalette: [string, string, string, string] =
+    Array.isArray(palette) && palette.length >= 4
+      ? [
+          String(palette[0] || '#F5E6C8'),
+          String(palette[1] || '#E7C896'),
+          String(palette[2] || '#854D27'),
+          String(palette[3] || '#27231F'),
+        ]
+      : ['#F5E6C8', '#E7C896', '#854D27', '#27231F'];
+  const cacheKey = `${motif || 'archway'}_${safePalette.join('_')}_${title || ''}`;
   const cached = artCache.get(cacheKey);
   if (cached) {
     // Refresh insertion order so frequently used artwork stays in the cache.
@@ -34,7 +43,7 @@ export function getProceduralMemoryArt(
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
 
-  const [skyTop, skyBottom, primaryTone, accentTone] = palette;
+  const [skyTop, skyBottom, primaryTone, accentTone] = safePalette;
 
   // 1. Multi-stop Golden Hour Sky Gradient
   const skyGrad = ctx.createLinearGradient(0, 0, 0, 600);

@@ -45,6 +45,7 @@ export interface DirectUploadResult {
   ok: boolean;
   savedMemories: Memory[];
   errorMessage?: string;
+  aborted?: boolean;
 }
 
 interface AddMemoryModalProps {
@@ -57,6 +58,7 @@ interface AddMemoryModalProps {
   onAddMemories: (newMemories: Memory[]) => void;
   onDirectUploadMemories?: (
     newMemories: Memory[],
+    options?: { signal?: AbortSignal },
   ) => Promise<DirectUploadResult>;
   onStartAutoCuration?: (items: CurationBatchItemInput[]) => void;
 }
@@ -70,6 +72,7 @@ function formatFileSize(bytes: number): string {
 export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   isOpen,
   onClose,
+  rooms,
   existingMemories = [],
   defaultRoomId,
   ownerId,
@@ -79,6 +82,7 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef<boolean>(true);
   const stagedFilesRef = useRef<StagedUploadItem[]>([]);
 
@@ -139,8 +143,27 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
     }
   };
 
+  const cancelActiveUpload = () => {
+    if (uploadAbortRef.current) {
+      uploadAbortRef.current.abort();
+      uploadAbortRef.current = null;
+    }
+    if (isMountedRef.current) {
+      setIsUploading(false);
+      setUploadProgressPct(0);
+      setUploadStatusText(null);
+    }
+  };
+
+  const handleCloseModal = () => {
+    cancelActiveUpload();
+    stopCameraStream();
+    onClose();
+  };
+
   useEffect(() => {
     if (!isOpen) {
+      cancelActiveUpload();
       stopCameraStream();
       setStagedFiles((prev) => {
         revokeStagedPreviews(prev);
@@ -162,19 +185,20 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isUploading) {
-        stopCameraStream();
-        onClose();
+      if (e.key === 'Escape') {
+        handleCloseModal();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, isUploading, onClose]);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
       stopCameraStream();
       revokeStagedPreviews(stagedFilesRef.current);
     };
@@ -183,6 +207,8 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   if (!isOpen) return null;
 
   const targetRoomId = defaultRoomId || 'childhood';
+  const targetRoom = rooms.find((r) => r.id === targetRoomId);
+  const targetRoomName = targetRoom?.name || 'Childhood Room';
 
   const handleStageFiles = (fileList: FileList | File[]) => {
     const files = Array.from(fileList || []);
@@ -244,16 +270,18 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
 
   const persistPreparedMemories = async (
     built: Array<{ memory: Memory; placement: AutomaticRoomPlacement }>,
+    signal?: AbortSignal,
   ) => {
+    if (signal?.aborted) return;
     const newMemories = built.map((b) => b.memory);
     setUploadProgressPct(85);
     setUploadStatusText(
-      `Saving ${newMemories.length} ${newMemories.length === 1 ? 'memory' : 'memories'} to your room…`,
+      `Saving ${newMemories.length} ${newMemories.length === 1 ? 'memory' : 'memories'} to ${targetRoomName}…`,
     );
 
     if (onDirectUploadMemories) {
-      const result = await onDirectUploadMemories(newMemories);
-      if (!isMountedRef.current) return;
+      const result = await onDirectUploadMemories(newMemories, { signal });
+      if (!isMountedRef.current || signal?.aborted || result.aborted) return;
       if (!result.ok) {
         setUploadError(
           result.errorMessage ||
@@ -262,10 +290,11 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         return;
       }
     } else {
+      if (signal?.aborted) return;
       onAddMemories(newMemories);
     }
 
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || signal?.aborted) return;
     setUploadProgressPct(100);
     setUploadStatusText(null);
     setUploadedReceipts(
@@ -289,6 +318,10 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   const handleUploadStagedFiles = async () => {
     if (stagedFiles.length === 0 || isUploading) return;
 
+    uploadAbortRef.current?.abort();
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+
     setIsUploading(true);
     setUploadError(null);
     setValidationNotices([]);
@@ -304,7 +337,7 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
       }> = [];
 
       for (let idx = 0; idx < stagedFiles.length; idx++) {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current || controller.signal.aborted) return;
         const stagedItem = stagedFiles[idx];
         const { file } = stagedItem;
         const pct = Math.round(((idx + 0.5) / stagedFiles.length) * 72) + 8;
@@ -319,15 +352,16 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
           userDescription: contextDescription,
           userDate: contextDate,
         });
+        if (!isMountedRef.current || controller.signal.aborted) return;
         built.push(item);
       }
 
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || controller.signal.aborted) return;
       if (built.length > 0) {
-        await persistPreparedMemories(built);
+        await persistPreparedMemories(built, controller.signal);
       }
     } catch (err) {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && !controller.signal.aborted) {
         setUploadError(
           err instanceof Error
             ? err.message
@@ -335,6 +369,9 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         );
       }
     } finally {
+      if (uploadAbortRef.current === controller) {
+        uploadAbortRef.current = null;
+      }
       if (isMountedRef.current) {
         setIsUploading(false);
       }
@@ -376,6 +413,10 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
   const handleCapturePhoto = async () => {
     const video = videoPreviewRef.current;
     if (!video || isUploading) return;
+    uploadAbortRef.current?.abort();
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+
     setIsUploading(true);
     setUploadError(null);
     setUploadProgressPct(25);
@@ -395,6 +436,7 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9),
       );
       stopCameraStream();
+      if (controller.signal.aborted) return;
       if (!blob) {
         throw new Error('Could not capture photo from camera feed.');
       }
@@ -407,11 +449,13 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         roomId: targetRoomId,
         ownerId: ownerId || undefined,
       });
-      if (!isMountedRef.current) return;
-      await persistPreparedMemories([built]);
-      setActiveTab('files');
+      if (!isMountedRef.current || controller.signal.aborted) return;
+      await persistPreparedMemories([built], controller.signal);
+      if (isMountedRef.current && !controller.signal.aborted) {
+        setActiveTab('files');
+      }
     } catch (err) {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && !controller.signal.aborted) {
         setCameraError(
           err instanceof Error
             ? err.message
@@ -419,6 +463,9 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         );
       }
     } finally {
+      if (uploadAbortRef.current === controller) {
+        uploadAbortRef.current = null;
+      }
       if (isMountedRef.current) {
         setIsUploading(false);
       }
@@ -437,7 +484,7 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
         <div className="px-5 sm:px-6 py-4 border-b border-[#E8DED0] bg-[#FAF4E8] flex items-start justify-between gap-4 shrink-0">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-widest text-[#854D27]">
-              Childhood Room Media Upload
+              {targetRoomName} Media Upload
             </p>
             <h2
               id="add-memories-title"
@@ -446,18 +493,14 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
               Bring your memories into this room
             </h2>
             <p className="text-xs text-[#493629] mt-1 leading-relaxed">
-              Upload photos, videos, or music. Each file is saved and placed directly into its spot inside the room.
+              Upload photos, videos, or music. Each file is saved and placed directly into its spot inside {targetRoomName}.
             </p>
           </div>
           <button
             type="button"
-            disabled={isUploading}
-            onClick={() => {
-              stopCameraStream();
-              onClose();
-            }}
-            aria-label="Close Upload Memories modal"
-            className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-[#6E5641] hover:bg-[#EFE6D5] disabled:opacity-40 cursor-pointer"
+            onClick={handleCloseModal}
+            aria-label={isUploading ? 'Cancel upload and close modal' : 'Close Upload Memories modal'}
+            className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-[#6E5641] hover:bg-[#EFE6D5] cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -512,7 +555,7 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
                           : `${uploadedReceipts.length} memories placed in the room`}
                       </p>
                       <p className="text-xs text-[#166534] mt-0.5">
-                        Saved permanently and ready to open inside the Childhood Room right away.
+                        Saved permanently and ready to open inside {targetRoomName} right away.
                       </p>
                     </div>
                   </div>
@@ -804,14 +847,16 @@ export const AddMemoryModal: React.FC<AddMemoryModalProps> = ({
                   <div className="flex items-center justify-end gap-2 pt-1">
                     <button
                       type="button"
-                      disabled={isUploading}
                       onClick={() => {
-                        stopCameraStream();
-                        onClose();
+                        if (isUploading) {
+                          cancelActiveUpload();
+                        } else {
+                          handleCloseModal();
+                        }
                       }}
-                      className="px-4 py-2.5 rounded-xl text-xs font-medium text-[#493629] hover:bg-[#EFE6D5] disabled:opacity-40 cursor-pointer"
+                      className="px-4 py-2.5 rounded-xl text-xs font-medium text-[#493629] hover:bg-[#EFE6D5] cursor-pointer"
                     >
-                      Cancel
+                      {isUploading ? 'Cancel Upload' : 'Cancel'}
                     </button>
                     <button
                       type="button"

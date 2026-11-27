@@ -56,6 +56,7 @@ import {
   INITIAL_ROOMS,
 } from './data/initialMuseumData';
 import {
+  compactMemoriesForLocalStorage,
   deleteMemoryFromStorageAdapter,
   fetchCurationStateFromVault,
   loadCurationStateFromStorage,
@@ -671,27 +672,41 @@ export default function App() {
       isBrandNewUser,
     );
     loadedFloors = normalized.floors;
+    const roomIdsReferencedByMemories = new Set(
+      normalized.memories
+        .map((m) => m.roomId)
+        .filter((id): id is string => Boolean(id)),
+    );
     loadedRooms = normalized.rooms.map((r) => {
       if (r.id === 'childhood') {
+        const shouldActivate =
+          isChildhoodExplicitlyActivated ||
+          roomIdsReferencedByMemories.has('childhood');
         return {
           ...r,
           name:
             r.name && !r.name.startsWith('Empty Slot')
               ? r.name
               : 'Childhood Room',
-          status: (isChildhoodExplicitlyActivated ? 'active' : 'empty') as RoomStatus,
-          enabled: isChildhoodExplicitlyActivated,
+          status: (shouldActivate ? 'active' : 'empty') as RoomStatus,
+          enabled: shouldActivate,
         };
       }
+      const keepActive =
+        r.status === 'active' ||
+        r.enabled === true ||
+        roomIdsReferencedByMemories.has(r.id);
       return {
         ...r,
-        status: 'empty' as RoomStatus,
-        enabled: false,
+        status: (keepActive ? 'active' : 'empty') as RoomStatus,
+        enabled: keepActive,
       };
     });
+    const validRoomIds = new Set(loadedRooms.map((r) => r.id));
     loadedMemories = normalized.memories.map((m) => ({
       ...m,
-      roomId: 'childhood',
+      roomId:
+        m.roomId && validRoomIds.has(m.roomId) ? m.roomId : 'childhood',
     }));
 
     let loadedCollections: Collection[] = isPrivateAccount
@@ -963,47 +978,46 @@ export default function App() {
         setMemories(hydrated);
       }
       try {
-        const lightweight = hydrated.map((m) => ({
-          ...m,
-          customImageUrl:
-            m.customImageUrl &&
-            m.customImageUrl.startsWith('data:') &&
-            m.customImageUrl.length > 16384
-              ? `idb://${m.id}`
-              : m.customImageUrl,
-          mediaUrl:
-            m.mediaUrl &&
-            m.mediaUrl.startsWith('data:') &&
-            m.mediaUrl.length > 16384
-              ? `idb://${m.id}`
-              : m.mediaUrl,
-        }));
-        localStorage.setItem(keys.MEMORIES, JSON.stringify(lightweight));
+        localStorage.setItem(
+          keys.MEMORIES,
+          JSON.stringify(compactMemoriesForLocalStorage(hydrated)),
+        );
       } catch {
         // ignore
       }
 
-      // If memories were restored from the server for the childhood room, ensure the room is marked active
+      // Ensure any room containing restored memories is marked active
       if (reconciled.memories.length > 0) {
-        try {
-          localStorage.setItem(keys.CHILDHOOD_ACTIVATED, 'true');
-        } catch {
-          // ignore
+        const restoredRoomIds = new Set(
+          reconciled.memories.map((m) => m.roomId).filter(Boolean),
+        );
+        if (restoredRoomIds.has('childhood')) {
+          try {
+            localStorage.setItem(keys.CHILDHOOD_ACTIVATED, 'true');
+          } catch {
+            // ignore
+          }
         }
         setRooms((prev) =>
-          prev.map((r) =>
-            r.id === 'childhood'
-              ? {
-                  ...r,
-                  name:
-                    r.name && !r.name.startsWith('Empty Slot')
-                      ? r.name
-                      : 'Childhood Room',
-                  status: 'active',
-                  enabled: true,
-                }
-              : r,
-          ),
+          prev.map((r) => {
+            if (!restoredRoomIds.has(r.id)) return r;
+            if (r.id === 'childhood') {
+              return {
+                ...r,
+                name:
+                  r.name && !r.name.startsWith('Empty Slot')
+                    ? r.name
+                    : 'Childhood Room',
+                status: 'active',
+                enabled: true,
+              };
+            }
+            return {
+              ...r,
+              status: 'active',
+              enabled: true,
+            };
+          }),
         );
       }
 
@@ -1055,22 +1069,10 @@ export default function App() {
   useEffect(() => {
     try {
       // Never store large base64 image binaries directly in localStorage; keep idb:// pointers instead
-      const lightweight = memories.map((m) => ({
-        ...m,
-        customImageUrl:
-          m.customImageUrl &&
-          m.customImageUrl.startsWith('data:') &&
-          m.customImageUrl.length > 16384
-            ? `idb://${m.id}`
-            : m.customImageUrl,
-        mediaUrl:
-          m.mediaUrl &&
-          m.mediaUrl.startsWith('data:') &&
-          m.mediaUrl.length > 16384
-            ? `idb://${m.id}`
-            : m.mediaUrl,
-      }));
-      localStorage.setItem(scopedKeys.MEMORIES, JSON.stringify(lightweight));
+      localStorage.setItem(
+        scopedKeys.MEMORIES,
+        JSON.stringify(compactMemoriesForLocalStorage(memories)),
+      );
     } catch {
       // ignore
     }
@@ -1728,7 +1730,10 @@ export default function App() {
     );
 
     try {
-      localStorage.setItem(scopedKeys.MEMORIES, JSON.stringify(nextMemories));
+      localStorage.setItem(
+        scopedKeys.MEMORIES,
+        JSON.stringify(compactMemoriesForLocalStorage(nextMemories)),
+      );
       setMemories(nextMemories);
       emitNotification(
         `memory-moved-${memoryId}-${Date.now()}`,
@@ -1821,7 +1826,10 @@ export default function App() {
     });
 
     try {
-      localStorage.setItem(scopedKeys.MEMORIES, JSON.stringify(nextMemories));
+      localStorage.setItem(
+        scopedKeys.MEMORIES,
+        JSON.stringify(compactMemoriesForLocalStorage(nextMemories)),
+      );
       setMemories(nextMemories);
     } catch {
       setMemories(previousMemories);
@@ -1990,13 +1998,18 @@ export default function App() {
   const handleDirectUploadMemories = useCallback(
     async (
       newMemories: Memory[],
+      options?: { signal?: AbortSignal },
     ): Promise<{
       ok: boolean;
       savedMemories: Memory[];
       errorMessage?: string;
+      aborted?: boolean;
     }> => {
       if (newMemories.length === 0) {
         return { ok: true, savedMemories: [] };
+      }
+      if (options?.signal?.aborted) {
+        return { ok: false, savedMemories: [], aborted: true };
       }
 
       const nowIso = new Date().toISOString();
@@ -2004,42 +2017,33 @@ export default function App() {
         (mem) =>
           ({
             ...mem,
+            roomId: mem.roomId || activeRoomId || 'childhood',
             ownerId: mem.ownerId || currentUser?.id,
             hiddenFrom3D: false,
             updatedAt: nowIso,
           }) as Memory,
       );
 
-      // Add immediately so the 3D Cupboard, Projector, and Radio update right away
-      setMemories((prev) => {
-        const existingIds = new Set(stampedMemories.map((m) => m.id));
-        return [
-          ...stampedMemories,
-          ...prev.filter((m) => !existingIds.has(m.id)),
-        ];
-      });
-
+      // Persist to vault/storage FIRST, then commit ONE atomic state update with stable IDs
+      // and durable server URLs (/api/storage/media/<id>) so the 3D scene only updates once
+      // and failed/cancelled uploads never pollute or roll back live room state.
       const results = await Promise.all(
         stampedMemories.map((mem) =>
           syncMemoryRecordToVault(
             mem as unknown as { id: string; [key: string]: unknown },
             currentUser?.id,
             sessionToken,
+            { signal: options?.signal },
           ),
         ),
       );
 
+      if (options?.signal?.aborted || results.some((r) => r.aborted)) {
+        return { ok: false, savedMemories: [], aborted: true };
+      }
+
       const failedResult = results.find((r) => !r.ok || !r.synced);
       if (failedResult && currentUser?.id && sessionToken) {
-        // Roll back rejected records if the server rejected the upload (e.g. unsupported format or too large)
-        const rejectedIds = new Set(
-          stampedMemories
-            .filter((_, idx) => !results[idx]?.ok || !results[idx]?.synced)
-            .map((m) => m.id),
-        );
-        if (rejectedIds.size > 0) {
-          setMemories((prev) => prev.filter((m) => !rejectedIds.has(m.id)));
-        }
         return {
           ok: false,
           savedMemories: [],
@@ -2062,6 +2066,10 @@ export default function App() {
         if (!srv) return m;
         return {
           ...m,
+          roomId:
+            typeof srv.roomId === 'string' && srv.roomId.trim()
+              ? srv.roomId
+              : m.roomId,
           mediaUrl:
             typeof srv.mediaUrl === 'string' ? srv.mediaUrl : m.mediaUrl,
           customImageUrl:
@@ -2071,14 +2079,14 @@ export default function App() {
         };
       });
 
-      if (serverMap.size > 0) {
-        setMemories((prev) =>
-          prev.map((m) => {
-            const updated = finalizedMemories.find((f) => f.id === m.id);
-            return updated || m;
-          }),
-        );
-      }
+      // Single atomic state merge keyed by stable memory ID (preserves concurrent uploads & existing memories)
+      setMemories((prev) => {
+        const incomingIds = new Set(finalizedMemories.map((m) => m.id));
+        return [
+          ...finalizedMemories,
+          ...prev.filter((m) => !incomingIds.has(m.id)),
+        ];
+      });
 
       const childhoodAdded = finalizedMemories.find(
         (m) => m.roomId === 'childhood',
@@ -2109,7 +2117,7 @@ export default function App() {
 
       return { ok: true, savedMemories: finalizedMemories };
     },
-    [currentUser?.id, sessionToken, emitNotification],
+    [activeRoomId, currentUser?.id, sessionToken, emitNotification],
   );
 
   const handleStartAutoCuration = (
@@ -3196,7 +3204,6 @@ export default function App() {
     isFeatureWallModalOpen ||
     Boolean(activeRoomId && isRoomCatalogueOpen) ||
     Boolean(selectedMemoryId) ||
-    isAddMemoryOpen ||
     isRoomEditorOpen ||
     isFloorExpansionOpen ||
     isResetConfirmOpen;

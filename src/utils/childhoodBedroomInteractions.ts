@@ -126,6 +126,7 @@ export interface ChildhoodBedroomInteractionController {
   // Filtered real-memory buckets (strictly real uploaded memories, never invented)
   getMemoriesForInteraction: (objectId: InteractiveObjectId3D) => Memory[];
   getVerifiedTimelineMemories: () => { dated: Memory[]; undated: Memory[] };
+  updateMemories: (nextMemories: Memory[]) => void;
   dispose: () => void;
 }
 
@@ -171,11 +172,17 @@ function isPhotoMemory(m: Memory): boolean {
 
 function getMemoryImageSrc(m: Memory): string | null {
   const mt = getEffectiveMediaType(m);
-  return m.customImageUrl || (mt === 'image' || mt === 'certificate' ? m.mediaUrl || null : null);
+  const candidate =
+    m.customImageUrl ||
+    (mt === 'image' || mt === 'certificate' ? m.mediaUrl || null : null);
+  if (!candidate || candidate.startsWith('idb://')) return null;
+  return candidate;
 }
 
 function getMemoryMediaSrc(m: Memory): string | null {
-  return m.mediaUrl || m.customImageUrl || null;
+  const candidate = m.mediaUrl || m.customImageUrl || null;
+  if (!candidate || candidate.startsWith('idb://')) return null;
+  return candidate;
 }
 
 function matchesKeywords(m: Memory, re: RegExp): boolean {
@@ -186,13 +193,26 @@ function matchesKeywords(m: Memory, re: RegExp): boolean {
 function loadImageIntoCanvas(
   src: string,
   onLoaded: (img: HTMLImageElement) => void,
+  onError?: () => void,
 ): void {
-  if (typeof Image === 'undefined') return;
+  if (typeof Image === 'undefined' || !src || src.startsWith('idb://')) {
+    onError?.();
+    return;
+  }
   const img = new Image();
-  if (!src.startsWith('data:') && !src.startsWith('blob:')) {
+  if (/^https?:\/\//i.test(src)) {
     img.crossOrigin = 'anonymous';
   }
-  img.onload = () => onLoaded(img);
+  img.onload = () => {
+    if ((img.naturalWidth || img.width) > 0 && (img.naturalHeight || img.height) > 0) {
+      onLoaded(img);
+    } else {
+      onError?.();
+    }
+  };
+  img.onerror = () => {
+    onError?.();
+  };
   img.src = src;
 }
 
@@ -271,60 +291,80 @@ export function attachChildhoodBedroomInteractions(
     cameraObstacleMeshes,
   } = params;
 
-  const visibleMemories = memories.filter((m) => !m.hiddenFrom3D);
-  const photoMemories = visibleMemories.filter(isPhotoMemory);
-  const videoMemories = visibleMemories.filter(
-    (m) => getEffectiveMediaType(m) === 'video' && Boolean(m.mediaUrl),
-  );
-  const audioMemories = visibleMemories.filter(
-    (m) => getEffectiveMediaType(m) === 'audio' && Boolean(m.mediaUrl),
-  );
-  const voiceMemories = audioMemories.filter((m) =>
-    matchesKeywords(m, /voice|story|note|memo|speech|grand|mom|dad|family|talk|diary|interview/),
-  );
-  const musicMemories = audioMemories.filter((m) => !voiceMemories.includes(m));
-  const certificateMemories = visibleMemories.filter(
-    (m) =>
-      getEffectiveMediaType(m) === 'certificate' ||
-      m.linkedObjectId === 'trophy_shelf' ||
-      m.linkedObjectId === 'study_desk' ||
-      matchesKeywords(m, /certificate|trophy|award|medal|diploma|honor|honour|prize|school|graduat|first place|champion/),
-  );
-  const drawingMemories = photoMemories.filter(
-    (m) =>
-      m.linkedObjectId === 'drawing_wall' ||
-      matchesKeywords(m, /draw|sketch|paint|art|crayon|doodle|poster|color|colour/),
-  );
-  const effectiveDrawings = drawingMemories.length > 0 ? drawingMemories : photoMemories.slice(0, 4);
-  const keepsakeMemories = visibleMemories.filter(
-    (m) =>
-      m.linkedObjectId === 'bedside_drawer' ||
-      matchesKeywords(m, /letter|note|diary|journal|postcard|ticket|keepsake|secret|bedside|story/),
-  );
-  const effectiveDrawerKeepsakes =
-    keepsakeMemories.length > 0
-      ? keepsakeMemories
-      : visibleMemories.filter((m) => Boolean(m.story || m.description)).slice(0, 6);
-  const schoolBagMemories = visibleMemories.filter(
-    (m) =>
-      m.linkedObjectId === 'school_bag' ||
-      matchesKeywords(m, /school|class|notebook|exam|homework|teacher|bag|backpack|uniform|study|friend/),
-  );
-  const wardrobeExplicitPhotos = photoMemories.filter(
-    (m) =>
-      m.linkedObjectId === 'wardrobe' ||
-      matchesKeywords(m, /wardrobe|cupboard|clothes|outfit|dress|uniform|jacket|costume|shirt|shoe|sweater/),
-  );
-  const wardrobeExplicitIds = new Set(wardrobeExplicitPhotos.map((m) => m.id));
-  const wardrobeMemories = [
-    ...wardrobeExplicitPhotos,
-    ...photoMemories.filter((m) => !wardrobeExplicitIds.has(m.id)),
-  ];
-  const cricketMemories = visibleMemories.filter(
-    (m) =>
-      m.linkedObjectId === 'cricket_set' ||
-      matchesKeywords(m, /cricket|bat|ball|match|sport|wicket|stadium|play|game|team/),
-  );
+  let visibleMemories: Memory[] = [];
+  let photoMemories: Memory[] = [];
+  let videoMemories: Memory[] = [];
+  let audioMemories: Memory[] = [];
+  let voiceMemories: Memory[] = [];
+  let musicMemories: Memory[] = [];
+  let certificateMemories: Memory[] = [];
+  let drawingMemories: Memory[] = [];
+  let effectiveDrawings: Memory[] = [];
+  let keepsakeMemories: Memory[] = [];
+  let effectiveDrawerKeepsakes: Memory[] = [];
+  let schoolBagMemories: Memory[] = [];
+  let wardrobeMemories: Memory[] = [];
+  let cricketMemories: Memory[] = [];
+
+  const recomputeMemoryBuckets = (sourceMemories: Memory[]) => {
+    const safeList = Array.isArray(sourceMemories) ? sourceMemories : [];
+    visibleMemories = safeList.filter((m) => m && !m.hiddenFrom3D);
+    photoMemories = visibleMemories.filter(isPhotoMemory);
+    videoMemories = visibleMemories.filter(
+      (m) => getEffectiveMediaType(m) === 'video' && Boolean(m.mediaUrl),
+    );
+    audioMemories = visibleMemories.filter(
+      (m) => getEffectiveMediaType(m) === 'audio' && Boolean(m.mediaUrl),
+    );
+    voiceMemories = audioMemories.filter((m) =>
+      matchesKeywords(m, /voice|story|note|memo|speech|grand|mom|dad|family|talk|diary|interview/),
+    );
+    musicMemories = audioMemories.filter((m) => !voiceMemories.includes(m));
+    certificateMemories = visibleMemories.filter(
+      (m) =>
+        getEffectiveMediaType(m) === 'certificate' ||
+        m.linkedObjectId === 'trophy_shelf' ||
+        m.linkedObjectId === 'study_desk' ||
+        matchesKeywords(m, /certificate|trophy|award|medal|diploma|honor|honour|prize|school|graduat|first place|champion/),
+    );
+    drawingMemories = photoMemories.filter(
+      (m) =>
+        m.linkedObjectId === 'drawing_wall' ||
+        matchesKeywords(m, /draw|sketch|paint|art|crayon|doodle|poster|color|colour/),
+    );
+    effectiveDrawings =
+      drawingMemories.length > 0 ? drawingMemories : photoMemories.slice(0, 4);
+    keepsakeMemories = visibleMemories.filter(
+      (m) =>
+        m.linkedObjectId === 'bedside_drawer' ||
+        matchesKeywords(m, /letter|note|diary|journal|postcard|ticket|keepsake|secret|bedside|story/),
+    );
+    effectiveDrawerKeepsakes =
+      keepsakeMemories.length > 0
+        ? keepsakeMemories
+        : visibleMemories.filter((m) => Boolean(m.story || m.description)).slice(0, 6);
+    schoolBagMemories = visibleMemories.filter(
+      (m) =>
+        m.linkedObjectId === 'school_bag' ||
+        matchesKeywords(m, /school|class|notebook|exam|homework|teacher|bag|backpack|uniform|study|friend/),
+    );
+    const wardrobeExplicitPhotos = photoMemories.filter(
+      (m) =>
+        m.linkedObjectId === 'wardrobe' ||
+        matchesKeywords(m, /wardrobe|cupboard|clothes|outfit|dress|uniform|jacket|costume|shirt|shoe|sweater/),
+    );
+    const wardrobeExplicitIds = new Set(wardrobeExplicitPhotos.map((m) => m.id));
+    wardrobeMemories = [
+      ...wardrobeExplicitPhotos,
+      ...photoMemories.filter((m) => !wardrobeExplicitIds.has(m.id)),
+    ];
+    cricketMemories = visibleMemories.filter(
+      (m) =>
+        m.linkedObjectId === 'cricket_set' ||
+        matchesKeywords(m, /cricket|bat|ball|match|sport|wicket|stadium|play|game|team/),
+    );
+  };
+  recomputeMemoryBuckets(memories);
 
   // Loaded HTMLImageElement cache (disposed by clearing map on exit)
   const loadedImages = new Map<string, HTMLImageElement>();
@@ -588,7 +628,7 @@ export function attachChildhoodBedroomInteractions(
   let scrapbookOpen = false;
   let pageFlipAnimProgress = 1;
   let pageFlipDir: -1 | 1 = 1;
-  const totalScrapbookSpreads = Math.max(1, Math.ceil(photoMemories.length / 2));
+  let totalScrapbookSpreads = Math.max(1, Math.ceil(photoMemories.length / 2));
 
   const renderScrapbookPage = (
     canvas: HTMLCanvasElement,
@@ -1175,18 +1215,21 @@ export function attachChildhoodBedroomInteractions(
   });
 
   // 3 Framed Certificate Slots on upper shelf (strictly real uploaded certificate/achievement memories)
-  const buildMiniFrameTexture = (
-    mem: Memory | undefined,
+  const createUpdatableMiniFrameTexture = (
+    initialMem: Memory | undefined,
     fallbackTitle: string,
     accentHex: string,
-  ): THREE.CanvasTexture => {
+  ): { tex: THREE.CanvasTexture; updateMemory: (nextMem: Memory | undefined) => void } => {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 192;
     const tex = track(new THREE.CanvasTexture(canvas));
     tex.colorSpace = THREE.SRGBColorSpace;
+    let currentMem = initialMem;
+    let loadGen = 0;
 
     const redraw = () => {
+      if (isDisposed) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.fillStyle = '#FAF3E4';
@@ -1195,30 +1238,33 @@ export function attachChildhoodBedroomInteractions(
       ctx.lineWidth = 6;
       ctx.strokeRect(10, 10, 236, 172);
 
-      const src = mem ? getMemoryImageSrc(mem) : null;
+      const src = currentMem ? getMemoryImageSrc(currentMem) : null;
       const img = src ? loadedImages.get(src) : undefined;
       if (img) {
-        const s = Math.max(224 / img.width, 160 / img.height);
+        const iw = Math.max(1, img.naturalWidth || img.width);
+        const ih = Math.max(1, img.naturalHeight || img.height);
+        const s = Math.max(224 / iw, 160 / ih);
         const sw = 224 / s;
         const sh = 160 / s;
-        ctx.drawImage(img, (img.width - sw) * 0.5, (img.height - sh) * 0.5, sw, sh, 16, 16, 224, 160);
+        ctx.drawImage(img, (iw - sw) * 0.5, (ih - sh) * 0.5, sw, sh, 16, 16, 224, 160);
       } else {
         ctx.fillStyle = '#4B3624';
         ctx.font = '700 16px Georgia, serif';
         ctx.textAlign = 'center';
-        ctx.fillText((mem?.title || fallbackTitle).slice(0, 24), 128, 92);
-        const dateMeta = mem ? getAuthenticMemoryDateLabel(mem) : { isUndated: true, label: null };
+        ctx.fillText((currentMem?.title || fallbackTitle).slice(0, 24), 128, 92);
+        const dateMeta = currentMem ? getAuthenticMemoryDateLabel(currentMem) : { isUndated: true, label: null };
         ctx.fillStyle = '#8C6A42';
         ctx.font = '13px sans-serif';
         ctx.fillText(
-          dateMeta.label || (mem ? 'Uploaded Memory' : 'Empty Frame'),
+          dateMeta.label || (currentMem ? 'Uploaded Memory' : 'Empty Frame'),
           128,
           120,
         );
         ctx.textAlign = 'left';
         if (src) {
+          const capturedGen = loadGen;
           loadImageIntoCanvas(src, (loaded) => {
-            if (isDisposed) return;
+            if (isDisposed || loadGen !== capturedGen) return;
             loadedImages.set(src, loaded);
             redraw();
           });
@@ -1227,8 +1273,24 @@ export function attachChildhoodBedroomInteractions(
       tex.needsUpdate = true;
     };
     redraw();
-    return tex;
+    return {
+      tex,
+      updateMemory: (nextMem: Memory | undefined) => {
+        currentMem = nextMem;
+        loadGen += 1;
+        redraw();
+      },
+    };
   };
+
+  const certFrameUpdaters: Array<(mem: Memory | undefined) => void> = [];
+  const pinboardFrameUpdaters: Array<(mem: Memory | undefined) => void> = [];
+  const drawingFrameUpdaters: Array<(mem: Memory | undefined) => void> = [];
+  const cupboardSlotControllers: Array<{
+    group: THREE.Group;
+    plane: THREE.Mesh;
+    updateMemory: (mem: Memory | undefined) => void;
+  }> = [];
 
   const certGlassMat = track(
     new THREE.MeshPhysicalMaterial({
@@ -1269,12 +1331,13 @@ export function attachChildhoodBedroomInteractions(
       matChampagneGold,
     );
     frameGroup.add(frameGoldFillet);
-    const certTex = buildMiniFrameTexture(certMem, 'Certificate Slot', '#B88C4A');
+    const certHandle = createUpdatableMiniFrameTexture(certMem, 'Certificate Slot', '#B88C4A');
+    certFrameUpdaters.push(certHandle.updateMemory);
     const certPlane = new THREE.Mesh(
       track(new THREE.PlaneGeometry(0.26, 0.195)),
       track(
         new THREE.MeshStandardMaterial({
-          map: certTex,
+          map: certHandle.tex,
           roughness: 0.44,
           metalness: 0.02,
         }),
@@ -1396,11 +1459,13 @@ export function attachChildhoodBedroomInteractions(
     polaroidCard.position.set(0, -0.012, 0);
     printGroup.add(polaroidCard);
 
+    const pinHandle = createUpdatableMiniFrameTexture(pMem, 'Pinned Photo', '#C9A66B');
+    pinboardFrameUpdaters.push(pinHandle.updateMemory);
     const card = new THREE.Mesh(
       track(new THREE.PlaneGeometry(0.286, 0.214)),
       track(
         new THREE.MeshStandardMaterial({
-          map: buildMiniFrameTexture(pMem, 'Pinned Photo', '#C9A66B'),
+          map: pinHandle.tex,
           roughness: 0.56,
           metalness: 0.0,
         }),
@@ -1492,11 +1557,13 @@ export function attachChildhoodBedroomInteractions(
     sheetGroup.rotation.z = rz;
     drawingWallGroup.add(sheetGroup);
 
+    const drawHandle = createUpdatableMiniFrameTexture(drawMem, 'Drawing Slot', '#D18B47');
+    drawingFrameUpdaters.push(drawHandle.updateMemory);
     const sheet = new THREE.Mesh(
       track(new THREE.PlaneGeometry(0.42, 0.34)),
       track(
         new THREE.MeshStandardMaterial({
-          map: buildMiniFrameTexture(drawMem, 'Drawing Slot', '#D18B47'),
+          map: drawHandle.tex,
           roughness: 0.84,
           metalness: 0.0,
         }),
@@ -2355,17 +2422,18 @@ export function attachChildhoodBedroomInteractions(
   foldedGarment.position.set(0.18, 1.13, 0.02);
   wardrobeInteriorGroup.add(foldedGarment);
 
-  // Real uploaded photo frames arranged inside the cupboard shelves (zero fictional photos)
+  // Real uploaded photo frames arranged inside the cupboard shelves (always pre-mounted & hidden until populated so uploads update in-place without rebuilding the room)
   const cupboardShelfSlots: Array<{ pos: [number, number, number]; rotY: number }> = [
     { pos: [-0.22, 1.66, -0.04], rotY: 0.14 },
     { pos: [0.16, 1.66, -0.04], rotY: -0.12 },
     { pos: [-0.16, 1.24, -0.04], rotY: 0.1 },
   ];
-  wardrobeMemories.slice(0, cupboardShelfSlots.length).forEach((photoMem, idx) => {
-    const slot = cupboardShelfSlots[idx];
+  cupboardShelfSlots.forEach((slot, idx) => {
+    const photoMem = wardrobeMemories[idx];
     const innerFrameGroup = new THREE.Group();
     innerFrameGroup.position.set(slot.pos[0], slot.pos[1], slot.pos[2]);
     innerFrameGroup.rotation.y = slot.rotY;
+    innerFrameGroup.visible = Boolean(photoMem);
     wardrobeInteriorGroup.add(innerFrameGroup);
 
     const frameBorder = new THREE.Mesh(
@@ -2374,13 +2442,14 @@ export function attachChildhoodBedroomInteractions(
     );
     innerFrameGroup.add(frameBorder);
 
+    const cupHandle = createUpdatableMiniFrameTexture(
+      photoMem,
+      'Cupboard Photo',
+      '#C9A66B',
+    );
     const innerPhotoMat = track(
       new THREE.MeshStandardMaterial({
-        map: buildMiniFrameTexture(
-          photoMem,
-          'Cupboard Photo',
-          '#C9A66B',
-        ),
+        map: cupHandle.tex,
         color: 0xffffff,
         roughness: 0.42,
       }),
@@ -2390,13 +2459,21 @@ export function attachChildhoodBedroomInteractions(
       innerPhotoMat,
     );
     innerPhotoPlane.position.z = 0.014;
-    innerPhotoPlane.userData = {
-      type: 'exhibit_memory',
-      memoryId: photoMem.id,
-      title: photoMem.title,
-      subtitle: 'Click to inspect uploaded photograph',
-    };
+    innerPhotoPlane.userData = photoMem
+      ? {
+          type: 'exhibit_memory',
+          memoryId: photoMem.id,
+          title: photoMem.title,
+          subtitle: 'Click to inspect uploaded photograph',
+        }
+      : {};
     innerFrameGroup.add(innerPhotoPlane);
+
+    cupboardSlotControllers.push({
+      group: innerFrameGroup,
+      plane: innerPhotoPlane,
+      updateMemory: cupHandle.updateMemory,
+    });
   });
 
   zones.push({
@@ -3028,8 +3105,11 @@ export function attachChildhoodBedroomInteractions(
   const calCanvas = document.createElement('canvas');
   calCanvas.width = 256;
   calCanvas.height = 256;
-  const calCtx = calCanvas.getContext('2d');
-  if (calCtx) {
+  const calTex = track(new THREE.CanvasTexture(calCanvas));
+  calTex.colorSpace = THREE.SRGBColorSpace;
+  const renderCalendarCanvas = () => {
+    const calCtx = calCanvas.getContext('2d');
+    if (!calCtx) return;
     const nowDate = new Date();
     const monthStr = nowDate.toLocaleString('en-US', { month: 'short' }).toUpperCase();
     calCtx.fillStyle = '#FAF3E4';
@@ -3047,9 +3127,9 @@ export function attachChildhoodBedroomInteractions(
     calCtx.font = '600 16px monospace';
     calCtx.fillText(`${visibleMemories.length} ARCHIVED`, 128, 224);
     calCtx.textAlign = 'left';
-  }
-  const calTex = track(new THREE.CanvasTexture(calCanvas));
-  calTex.colorSpace = THREE.SRGBColorSpace;
+    calTex.needsUpdate = true;
+  };
+  renderCalendarCanvas();
   const calPlane = new THREE.Mesh(
     track(new THREE.PlaneGeometry(0.34, 0.36)),
     track(
@@ -3642,6 +3722,67 @@ export function attachChildhoodBedroomInteractions(
     },
 
     getVerifiedTimelineMemories,
+
+    updateMemories(nextMemories: Memory[]) {
+      if (isDisposed) return;
+      const hadVideosBefore = videoMemories.length > 0;
+      recomputeMemoryBuckets(nextMemories);
+
+      totalScrapbookSpreads = Math.max(1, Math.ceil(photoMemories.length / 2));
+      scrapbookSpreadIndex = Math.max(
+        0,
+        Math.min(scrapbookSpreadIndex, totalScrapbookSpreads - 1),
+      );
+      renderScrapbookSpread();
+
+      if (effectiveDrawerKeepsakes.length > 0) {
+        drawerSelectedIndex = Math.max(
+          0,
+          Math.min(drawerSelectedIndex, effectiveDrawerKeepsakes.length - 1),
+        );
+      } else {
+        drawerSelectedIndex = 0;
+      }
+
+      certFrameUpdaters.forEach((updateFn, idx) => {
+        updateFn(certificateMemories[idx]);
+      });
+      pinboardFrameUpdaters.forEach((updateFn, idx) => {
+        updateFn(photoMemories[idx]);
+      });
+      drawingFrameUpdaters.forEach((updateFn, idx) => {
+        updateFn(effectiveDrawings[idx]);
+      });
+      cupboardSlotControllers.forEach((slotCtrl, idx) => {
+        const photoMem = wardrobeMemories[idx];
+        slotCtrl.group.visible = Boolean(photoMem);
+        slotCtrl.plane.userData = photoMem
+          ? {
+              type: 'exhibit_memory',
+              memoryId: photoMem.id,
+              title: photoMem.title,
+              subtitle: 'Click to inspect uploaded photograph',
+            }
+          : {};
+        slotCtrl.updateMemory(photoMem);
+      });
+
+      if (!hadVideosBefore && videoMemories.length > 0) {
+        projectorOn = true;
+        projBeamMesh.visible = true;
+        projectorSlideIndex = 0;
+      } else if (videoMemories.length > 0) {
+        projectorSlideIndex = Math.max(
+          0,
+          Math.min(projectorSlideIndex, videoMemories.length - 1),
+        );
+      } else {
+        projectorSlideIndex = 0;
+      }
+      renderProjectorSlide();
+      renderCalendarCanvas();
+      crtRedrawDirty = true;
+    },
 
     dispose() {
       isDisposed = true;
