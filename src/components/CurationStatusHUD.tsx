@@ -36,6 +36,7 @@ interface CurationStatusHUDProps {
   onDismiss: () => void;
   onOpenCollection: (collectionId: string) => void;
   onRetryFailed: () => void;
+  onRetrySaveFailed?: () => void;
   onSaveWithLocalFallback?: () => void;
   onUndoLastBatch: () => void;
   onApproveItemPlacement?: (update: PlacementApprovalUpdate) => void;
@@ -47,14 +48,9 @@ const PHASE_STEPS: Array<{
   id: CurationBatchState['phase'];
   label: string;
 }> = [
-  { id: 'uploading', label: 'Uploading' },
-  { id: 'preserving_original', label: 'Preserving Original' },
-  { id: 'analysing', label: 'Analysing' },
-  { id: 'organising', label: 'Organising' },
-  { id: 'finding_related', label: 'Finding Related' },
-  { id: 'assigning_locations', label: 'Suggesting Location' },
-  { id: 'review', label: 'Review' },
-  { id: 'ready', label: 'Placed in Museum' },
+  { id: 'analysing', label: 'Analyzing memory' },
+  { id: 'saving', label: 'Saving memory' },
+  { id: 'ready', label: 'Memory added' },
 ];
 
 const LOCATION_OPTIONS = Object.values(CHILDHOOD_WORLD_LOCATION_CATALOGUE);
@@ -71,6 +67,7 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
   onDismiss,
   onOpenCollection,
   onRetryFailed,
+  onRetrySaveFailed,
   onSaveWithLocalFallback,
   onUndoLastBatch,
   onApproveItemPlacement,
@@ -90,7 +87,7 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
             title: item.suggestedTitle || item.fileName,
             description: item.suggestedDescription || '',
             date: item.suggestedDate || '',
-            locationId: item.locationId || 'keepsake_corner',
+            locationId: item.locationId || 'memory_wall',
           };
         }
       }
@@ -100,21 +97,11 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
 
   useEffect(() => {
     if (!batchState) return;
-    const reviewDone = batchState.items.filter(
-      (it) => it.status === 'done' && Boolean(it.memoryId),
-    );
-    const pendingApproval = reviewDone.filter((it) => !it.placementApproved);
-    const failed = batchState.items.filter((it) => it.status === 'failed');
     if (
-      batchState.phase === 'ready' &&
-      pendingApproval.length === 0 &&
-      failed.length === 0
-    ) {
-      setIsMinimized(true);
-    } else if (
-      batchState.phase === 'review' ||
       batchState.phase === 'error' ||
-      pendingApproval.length > 0
+      batchState.phase === 'save_failed' ||
+      batchState.phase === 'review' ||
+      batchState.phase === 'ready'
     ) {
       setIsMinimized(false);
     }
@@ -122,21 +109,23 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
 
   if (!batchState || batchState.phase === 'idle') return null;
 
-  const normalizedPhase =
-    batchState.phase === 'linking'
-      ? 'finding_related'
-      : batchState.phase === 'preparing_collections' ||
+  const normalizedPhase: CurationBatchState['phase'] =
+    batchState.phase === 'uploading' ||
+    batchState.phase === 'preserving_original' ||
+    batchState.phase === 'analysing'
+      ? 'analysing'
+      : batchState.phase === 'saving' ||
+          batchState.phase === 'organising' ||
+          batchState.phase === 'finding_related' ||
+          batchState.phase === 'linking' ||
+          batchState.phase === 'preparing_collections' ||
+          batchState.phase === 'assigning_locations' ||
           batchState.phase === 'preparing'
-        ? 'assigning_locations'
+        ? 'saving'
         : batchState.phase;
 
   const isRunning =
-    normalizedPhase === 'uploading' ||
-    normalizedPhase === 'preserving_original' ||
-    normalizedPhase === 'analysing' ||
-    normalizedPhase === 'organising' ||
-    normalizedPhase === 'finding_related' ||
-    normalizedPhase === 'assigning_locations';
+    normalizedPhase === 'analysing' || normalizedPhase === 'saving';
 
   const currentStepIndex = Math.max(
     0,
@@ -145,10 +134,13 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
 
   const reviewItems = batchState.items.filter(
     (it): it is CurationBatchItemStatus & { memoryId: string } =>
-      it.status === 'done' && Boolean(it.memoryId),
+      it.status === 'done' && Boolean(it.memoryId) && it.saveStatus !== 'failed',
   );
   const unapprovedItems = reviewItems.filter((it) => !it.placementApproved);
   const failedItems = batchState.items.filter((it) => it.status === 'failed');
+  const saveFailedItems = batchState.items.filter(
+    (it) => it.saveStatus === 'failed',
+  );
 
   const updateDraft = (memoryId: string, patch: Partial<DraftEdits>) => {
     setDraftEdits((prev) => ({
@@ -196,14 +188,14 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
           <div className="flex items-center gap-2 min-w-0">
             {isRunning ? (
               <Loader2 className="w-4 h-4 text-[#854D27] animate-spin shrink-0" />
-            ) : batchState.phase === 'error' ? (
+            ) : batchState.phase === 'error' || batchState.phase === 'save_failed' ? (
               <AlertTriangle className="w-4 h-4 text-[#991B1B] shrink-0" />
             ) : (
               <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
             )}
             <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-[#854D27]">
-                MEMORA Curator · Stage {Math.min(PHASE_STEPS.length, currentStepIndex + 1)} of {PHASE_STEPS.length}
+                Childhood Room Curator
               </p>
               <h3 className="font-serif-display text-sm font-semibold text-[#27231F] truncate">
                 {batchState.phaseLabel}
@@ -236,19 +228,21 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
           </div>
         </div>
 
-        {/* 8-Stage Discrete Progress Bar */}
+        {/* 3-Stage Progress Bar */}
         <div className="mt-2.5">
-          <div className="grid grid-cols-8 gap-1">
+          <div className="grid grid-cols-3 gap-1.5">
             {PHASE_STEPS.map((step, idx) => {
               const done =
                 normalizedPhase === 'ready' || idx < currentStepIndex;
               const active = idx === currentStepIndex && isRunning;
+              const isFailed =
+                batchState.phase === 'error' || batchState.phase === 'save_failed';
               return (
                 <div
                   key={step.id}
                   title={step.label}
                   className={`h-1.5 rounded-full transition-colors ${
-                    batchState.phase === 'error' && idx === currentStepIndex
+                    isFailed && idx === Math.min(idx, currentStepIndex)
                       ? 'bg-[#C26D3A]'
                       : done
                         ? 'bg-[#15803D]'
@@ -262,16 +256,16 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#6E5641] font-mono-tabular">
             <span>
-              {batchState.completedCount} of {batchState.totalCount} analysed
+              {batchState.completedCount} of {batchState.totalCount} saved
             </span>
             <span>
-              {isRunning
-                ? 'Explore freely while curating'
-                : unapprovedItems.length > 0
-                  ? `${unapprovedItems.length} awaiting approval`
+              {batchState.phase === 'save_failed'
+                ? 'Could not save — retry'
+                : isRunning
+                  ? batchState.phaseLabel
                   : batchState.failedCount > 0
-                    ? `${batchState.failedCount} failed — preserved`
-                    : 'Placed in 3D Park'}
+                    ? `${batchState.failedCount} need attention`
+                    : 'Saved to Childhood Room'}
             </span>
           </div>
         </div>
@@ -409,10 +403,42 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
                           </p>
                           <p className="text-[11px] text-[#2F5A2F] flex items-center gap-1">
                             <Check className="w-3.5 h-3.5 shrink-0" />
-                            Placed in{' '}
+                            Added to{' '}
                             {CHILDHOOD_WORLD_LOCATION_CATALOGUE[edit.locationId]
                               ?.label || edit.locationId}
                           </p>
+                          {item.assistantResponse && (
+                            <p className="text-[11px] text-[#3F2E21] leading-snug mt-1">
+                              {item.assistantResponse}
+                            </p>
+                          )}
+                          <div className="mt-1.5 flex items-center gap-1.5">
+                            <select
+                              value={edit.locationId}
+                              onChange={(e) => {
+                                const nextLoc = e.target
+                                  .value as ChildhoodWorldLocationId;
+                                updateDraft(item.memoryId, {
+                                  locationId: nextLoc,
+                                });
+                                onApproveItemPlacement?.({
+                                  memoryId: item.memoryId,
+                                  locationId: nextLoc,
+                                  title: edit.title,
+                                  description: edit.description,
+                                  date: edit.date,
+                                });
+                              }}
+                              aria-label="Change Childhood Room location"
+                              className="px-2 py-1 rounded-md bg-[#FFFCF6] border border-[#DFCDAE] text-[10px] text-[#27231F]"
+                            >
+                              {LOCATION_OPTIONS.map((loc) => (
+                                <option key={loc.id} value={loc.id}>
+                                  Move to: {loc.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         </>
                       ) : (
                         <input
@@ -540,13 +566,27 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
           </div>
         )}
 
-        {/* Failed Items & Honest Error / Explicit Fallback Controls */}
-        {(batchState.errorBannerMessage || failedItems.length > 0) && (
+        {/* Failed Items & Honest Error / Retry Save / Manual Save Controls */}
+        {(batchState.errorBannerMessage ||
+          failedItems.length > 0 ||
+          saveFailedItems.length > 0) && (
           <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-xs text-[#991B1B] space-y-2">
             <p className="font-semibold">
               {batchState.errorBannerMessage ||
-                'Some uploaded files could not be analysed by Gemini.'}
+                (saveFailedItems.length > 0
+                  ? 'Could not save — retry'
+                  : 'Some uploaded files could not be analyzed by Gemini.')}
             </p>
+            {saveFailedItems.length > 0 && (
+              <ul className="space-y-1 text-[11px]">
+                {saveFailedItems.map((fi) => (
+                  <li key={fi.tempId} className="leading-snug">
+                    • <strong>{fi.suggestedTitle || fi.fileName}:</strong>{' '}
+                    {fi.saveError || 'Could not save to project storage.'}
+                  </li>
+                ))}
+              </ul>
+            )}
             {failedItems.length > 0 && (
               <ul className="space-y-1 text-[11px]">
                 {failedItems.map((fi) => (
@@ -558,23 +598,33 @@ export const CurationStatusHUD: React.FC<CurationStatusHUDProps> = ({
               </ul>
             )}
             <div className="flex flex-wrap items-center gap-2 pt-1">
-              {batchState.failedCount > 0 && (
+              {saveFailedItems.length > 0 && onRetrySaveFailed && (
+                <button
+                  type="button"
+                  onClick={onRetrySaveFailed}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#991B1B] text-white hover:bg-[#7F1D1D] cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Retry Save ({saveFailedItems.length})
+                </button>
+              )}
+              {failedItems.length > 0 && (
                 <button
                   type="button"
                   onClick={onRetryFailed}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#991B1B] text-white hover:bg-[#7F1D1D] cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  Retry with Gemini ({batchState.failedCount})
+                  Retry with Gemini ({failedItems.length})
                 </button>
               )}
-              {batchState.failedCount > 0 && onSaveWithLocalFallback && (
+              {failedItems.length > 0 && onSaveWithLocalFallback && (
                 <button
                   type="button"
                   onClick={onSaveWithLocalFallback}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FFFCF6] text-[#7F1D1D] border border-[#FCA5A5] hover:bg-[#FEE2E2] cursor-pointer"
                 >
-                  Save Locally (Non-Gemini)
+                  Save Manually (No AI)
                 </button>
               )}
             </div>

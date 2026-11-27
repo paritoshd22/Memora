@@ -11,7 +11,10 @@ import {
 } from './museum';
 
 export type ChildhoodWorldLocationId =
+  | 'memory_wall'
   | 'bedroom'
+  | 'toy_box'
+  | 'bookshelf'
   | 'study_corner'
   | 'backyard'
   | 'treehouse'
@@ -37,20 +40,57 @@ export const CHILDHOOD_WORLD_LOCATION_CATALOGUE: Record<
   ChildhoodWorldLocationId,
   ChildhoodLocationCatalogueEntry
 > = {
+  memory_wall: {
+    id: 'memory_wall',
+    label: 'Memory Wall',
+    spaceId: 'central_gallery',
+    placementTarget: 'memory_wall',
+    linkedObjectId: 'cork_pinboard',
+    anchor: { x: 0.0, y: 2.18, z: -7.15 },
+    safeRadius: 2.4,
+    allowedMediaTypes: ['image', 'story', 'certificate', 'document', 'chat'],
+    experienceSummary:
+      'Main Childhood Room gallery wall highlighting milestone photos and important moments.',
+  },
   bedroom: {
     id: 'bedroom',
-    label: 'Childhood Bedroom',
+    label: 'Photo Frames & Bedroom Alcove',
     spaceId: 'bedroom',
-    placementTarget: 'bedside_shelf',
+    placementTarget: 'wall_frame',
     linkedObjectId: 'wooden_bed',
     anchor: { x: -4.95, y: 1.55, z: 3.65 },
-    safeRadius: 1.4,
+    safeRadius: 1.6,
     allowedMediaTypes: ['image', 'story', 'document', 'audio', 'chat'],
-    experienceSummary: 'Warm walnut bed alcove and intimate bedside gallery frames.',
+    experienceSummary:
+      'Framed portrait gallery and warm walnut bedside frames for cherished photographs.',
+  },
+  toy_box: {
+    id: 'toy_box',
+    label: 'Toy Box',
+    spaceId: 'play_area',
+    placementTarget: 'toy_box',
+    linkedObjectId: 'toy_chest',
+    anchor: { x: 0.45, y: 0.72, z: -2.95 },
+    safeRadius: 1.4,
+    allowedMediaTypes: ['image', 'story', 'video', 'audio', 'chat'],
+    experienceSummary:
+      'Painted keepsake toy chest holding childhood toys, playtime photos, and treasured keepsakes.',
+  },
+  bookshelf: {
+    id: 'bookshelf',
+    label: 'Bookshelf',
+    spaceId: 'study_corner',
+    placementTarget: 'bookshelf',
+    linkedObjectId: 'bookshelf',
+    anchor: { x: -6.35, y: 1.68, z: -1.15 },
+    safeRadius: 1.45,
+    allowedMediaTypes: ['image', 'document', 'certificate', 'story', 'chat'],
+    experienceSummary:
+      'Walnut childhood bookshelf displaying favorite books, notebooks, and school memories.',
   },
   study_corner: {
     id: 'study_corner',
-    label: 'Study Corner & Reading Desk',
+    label: 'Study Desk',
     spaceId: 'study_corner',
     placementTarget: 'study_desk',
     linkedObjectId: 'study_desk',
@@ -58,7 +98,7 @@ export const CHILDHOOD_WORLD_LOCATION_CATALOGUE: Record<
     safeRadius: 1.35,
     allowedMediaTypes: ['document', 'certificate', 'story', 'chat', 'image'],
     experienceSummary:
-      'Brass-lamp reading desk designed for certificates, notebooks, PDFs, and letters.',
+      'Brass-lamp study desk for drawings, school projects, certificates, and letters.',
   },
   backyard: {
     id: 'backyard',
@@ -202,6 +242,7 @@ export interface MemoryAnalysisReport {
   recommendedDisplayObject?: InteractiveObjectId3D;
   recommendedInteraction?: string;
   recommendedReason: string;
+  assistantResponse?: string;
   sensitiveReconstructionRequiresApproval: boolean;
   autoPlacedIn3D: boolean;
 }
@@ -211,6 +252,7 @@ export type CurationLifecyclePhase =
   | 'uploading'
   | 'preserving_original'
   | 'analysing'
+  | 'saving'
   | 'organising'
   | 'finding_related'
   | 'linking'
@@ -219,6 +261,7 @@ export type CurationLifecyclePhase =
   | 'review'
   | 'preparing'
   | 'ready'
+  | 'save_failed'
   | 'error';
 
 export interface CurationBatchItemInput {
@@ -254,7 +297,9 @@ export interface CurationBatchItemStatus {
   suggestedTitle?: string;
   suggestedDescription?: string;
   suggestedDate?: string;
+  suggestedTags?: string[];
   recommendedReason?: string;
+  assistantResponse?: string;
   confidenceScore?: number;
   analyzedBy?: 'gemini' | 'deterministic_fallback';
   modelUsed?: string;
@@ -263,6 +308,8 @@ export interface CurationBatchItemStatus {
   warnings?: string[];
   thumbnailUrl?: string;
   placementApproved?: boolean;
+  saveStatus?: 'pending' | 'saving' | 'saved' | 'failed';
+  saveError?: string;
   errorMessage?: string;
   inputSnapshot: CurationBatchItemInput;
 }
@@ -288,6 +335,7 @@ export interface CurationBatchState {
   items: CurationBatchItemStatus[];
   primaryReadyCollectionId?: string;
   primaryReadyCollectionTitle?: string;
+  assistantSummary?: string;
   errorBannerMessage?: string;
   lastUndoSnapshot?: CurationUndoSnapshot | null;
 }

@@ -330,10 +330,10 @@ export function validateLocationPlacement(
       case 'chat':
         return 'treehouse';
       case 'story':
-        return 'bedroom';
+        return 'bookshelf';
       case 'image':
       default:
-        return 'memory_garden';
+        return 'memory_wall';
     }
   };
 
@@ -680,16 +680,22 @@ export function buildGroundedFallbackReport(params: {
 
   const cueText = `${params.fileName || ''} ${params.rawTextContent || ''} ${params.transcript || ''}`.toLowerCase();
   let inferredLocation: ChildhoodWorldLocationId | undefined;
-  if (/bicycle|bike|cycling|pedal|trail/.test(cueText)) {
+  if (/toy|plush|teddy|lego|doll|playroom|blocks|keepsake/.test(cueText)) {
+    inferredLocation = 'toy_box';
+  } else if (/book|library|notebook|reading|textbook|novel|comic|shelf/.test(cueText)) {
+    inferredLocation = 'bookshelf';
+  } else if (/study|desk|school|certificate|diploma|homework|exam|drawing|sketch|project|award/.test(cueText)) {
+    inferredLocation = 'study_corner';
+  } else if (/bicycle|bike|cycling|pedal|trail/.test(cueText)) {
     inferredLocation = 'bicycle_trail';
   } else if (/treehouse|fort|ladder|friend|chat/.test(cueText) || params.mediaCategory === 'chat') {
     inferredLocation = 'treehouse';
   } else if (/garden|flower|swing|meadow/.test(cueText)) {
     inferredLocation = 'memory_garden';
-  } else if (/study|desk|school|certificate|diploma|homework|exam/.test(cueText)) {
-    inferredLocation = 'study_corner';
-  } else if (/bedroom|bed|sleep|story|night/.test(cueText)) {
+  } else if (/bedroom|bed|sleep|night|frame|portrait/.test(cueText)) {
     inferredLocation = 'bedroom';
+  } else if (/wall|milestone|family|birthday|celebration/.test(cueText)) {
+    inferredLocation = 'memory_wall';
   }
 
   const placement = validateLocationPlacement(inferredLocation, params.mediaCategory);

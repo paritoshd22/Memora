@@ -302,6 +302,32 @@ export interface Memory {
   collectionIds?: string[];
   videoHighlights?: import('./curation').VideoHighlightMoment[];
   audioKind?: 'music' | 'speech' | 'environmental';
+  userProvided?: {
+    title?: string;
+    description?: string;
+    story?: string;
+    date?: string;
+    location?: string;
+    tags?: string[];
+  };
+  aiSuggestions?: {
+    title?: string;
+    description?: string;
+    tags?: string[];
+    locationId?: import('./curation').ChildhoodWorldLocationId;
+    assistantResponse?: string;
+    modelUsed?: string;
+    generatedAt?: string;
+  };
+  confirmationStatus?: 'auto_placed' | 'user_confirmed' | 'user_edited' | 'manual_no_ai';
+  assistantNote?: string;
+  placement3D?: {
+    locationId: import('./curation').ChildhoodWorldLocationId;
+    placementTarget?: import('./aiStudio').MemoryPlacementTarget;
+    linkedObjectId?: InteractiveObjectId3D;
+    position: [number, number, number];
+    rotationY?: number;
+  };
 }
 
 export type MemoryItem = Memory;

@@ -61,48 +61,77 @@ const MEMORY_PLACEMENT_OPTIONS: Array<{
   label: string;
   linked3DObject: string;
   linkedObjectId: InteractiveObjectId3D;
+  curatedZoneId: ChildhoodWorldLocationId;
 }> = [
   {
+    id: 'memory_wall',
+    label: 'Memory Wall (Important Moments)',
+    linked3DObject: 'Childhood Memory Wall',
+    linkedObjectId: 'cork_pinboard',
+    curatedZoneId: 'memory_wall',
+  },
+  {
     id: 'wall_frame',
-    label: 'Bedroom Wall Photo Frame',
-    linked3DObject: 'Childhood Bedroom Wall Frame',
+    label: 'Photo Frames (Bedroom Alcove)',
+    linked3DObject: 'Childhood Bedroom Photo Frame',
     linkedObjectId: 'wooden_bed',
+    curatedZoneId: 'bedroom',
+  },
+  {
+    id: 'toy_box',
+    label: 'Toy Box (Childhood Keepsakes)',
+    linked3DObject: 'Hinged Childhood Toy Chest',
+    linkedObjectId: 'toy_chest',
+    curatedZoneId: 'toy_box',
+  },
+  {
+    id: 'bookshelf',
+    label: 'Bookshelf (Books & School Memories)',
+    linked3DObject: 'Childhood Bookshelf',
+    linkedObjectId: 'bookshelf',
+    curatedZoneId: 'bookshelf',
   },
   {
     id: 'study_desk',
-    label: 'Study Table & Desk Display',
+    label: 'Study Desk (Drawings, Projects & Certificates)',
     linked3DObject: 'Study Desk Display',
     linkedObjectId: 'study_desk',
+    curatedZoneId: 'study_corner',
   },
   {
     id: 'bedside_shelf',
     label: 'Bedside Shelf & Keepsake Ledge',
     linked3DObject: 'Bedside Shelf Frame',
     linkedObjectId: 'wooden_bed',
+    curatedZoneId: 'bedroom',
   },
   {
     id: 'scrapbook_podium',
     label: 'Interactive Scrapbook Table',
     linked3DObject: 'Interactive Scrapbook Podium',
     linkedObjectId: 'toy_train',
+    curatedZoneId: 'memory_wall',
   },
   {
     id: 'cinema_screen',
     label: 'Cinema Corner Projector Screen',
     linked3DObject: 'Cinema Corner Screen',
     linkedObjectId: 'bedroom_tv',
+    curatedZoneId: 'outdoor_cinema',
   },
   {
     id: 'audio_booth',
     label: 'Audio Memories Listening Booth',
     linked3DObject: 'Audio Listening Station',
     linkedObjectId: 'wardrobe',
+    curatedZoneId: 'memory_radio',
   },
   {
     id: 'keepsake_cabinet',
     label: 'Keepsake Glass Display Cabinet',
     linked3DObject: 'Keepsake Glass Cabinet',
     linkedObjectId: 'toy_chest',
+    curatedZoneId: 'keepsake_corner',
   },
 ];
 
@@ -1465,7 +1494,7 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
                   <dd>
                     <select
                       aria-label="Select 3D Room Placement"
-                      value={memory.placementTarget || 'wall_frame'}
+                      value={memory.placementTarget || 'memory_wall'}
                       onChange={(e) => {
                         if (onUpdateMemory) {
                           const targetId = e.target
@@ -1473,13 +1502,38 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
                           const matched = MEMORY_PLACEMENT_OPTIONS.find(
                             (o) => o.id === targetId,
                           );
+                          const nextZone =
+                            matched?.curatedZoneId ||
+                            memory.curatedZoneId ||
+                            'memory_wall';
+                          const catalogEntry =
+                            CHILDHOOD_WORLD_LOCATION_CATALOGUE[nextZone];
                           onUpdateMemory({
                             ...memory,
+                            curatedZoneId: nextZone,
                             placementTarget: targetId,
                             linked3DObject:
                               matched?.linked3DObject || memory.linked3DObject,
                             linkedObjectId:
                               matched?.linkedObjectId || memory.linkedObjectId,
+                            linkedSpaceId:
+                              catalogEntry?.spaceId || memory.linkedSpaceId,
+                            confirmationStatus: 'user_edited',
+                            placement3D: catalogEntry
+                              ? {
+                                  locationId: nextZone,
+                                  placementTarget: targetId,
+                                  linkedObjectId:
+                                    matched?.linkedObjectId ||
+                                    catalogEntry.linkedObjectId,
+                                  position: [
+                                    catalogEntry.anchor.x,
+                                    catalogEntry.anchor.y,
+                                    catalogEntry.anchor.z,
+                                  ],
+                                }
+                              : memory.placement3D,
+                            updatedAt: new Date().toISOString(),
                           });
                         }
                       }}
@@ -1493,6 +1547,42 @@ export const MemoryDetailModal: React.FC<MemoryDetailModalProps> = ({
                     </select>
                   </dd>
                 </div>
+                {(memory.userProvided || memory.aiSuggestions) && (
+                  <div className="py-2 px-3 rounded-lg bg-[#FAF5EB] border border-[#E8DED0] space-y-1.5 text-[11px]">
+                    <p className="font-semibold uppercase tracking-wider text-[10px] text-[#854D27]">
+                      Source Provenance
+                    </p>
+                    {memory.userProvided &&
+                      (memory.userProvided.title ||
+                        memory.userProvided.description ||
+                        memory.userProvided.date) && (
+                        <div className="text-[#27231F]">
+                          <span className="font-semibold">Your input: </span>
+                          {[
+                            memory.userProvided.title,
+                            memory.userProvided.description,
+                            memory.userProvided.date,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      )}
+                    {memory.aiSuggestions && (
+                      <div className="text-[#493629]">
+                        <span className="font-semibold text-[#854D27]">
+                          Gemini suggestion
+                          {memory.aiSuggestions.modelUsed
+                            ? ` (${memory.aiSuggestions.modelUsed})`
+                            : ''}
+                          :{' '}
+                        </span>
+                        {memory.aiSuggestions.assistantResponse ||
+                          memory.aiSuggestions.description ||
+                          memory.aiSuggestions.title}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="flex justify-between items-center py-1 border-b border-[#F6F1E8]">
                   <dt className="text-[#7C6450] uppercase tracking-wider">
                     Reposition in 3D

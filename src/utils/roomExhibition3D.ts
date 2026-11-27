@@ -4,6 +4,7 @@ import {
   attachChildhoodBedroomInteractions,
   ChildhoodBedroomInteractionController,
 } from './childhoodBedroomInteractions';
+import { createChildhoodBedroomMaterialLibrary } from './childhoodBedroomMaterials';
 import {
   Collection,
   ExhibitionDisplayStyle,
@@ -417,7 +418,46 @@ export function resolve3DPlacementPosition(
     };
   }
 
-  if (zone === 'bedroom' || target === 'bedside_shelf') {
+  if (zone === 'memory_wall' || target === 'memory_wall') {
+    const col = slotInZone % 4;
+    const row = Math.floor(slotInZone / 4);
+    return {
+      x: -2.25 + col * 1.48 + offsetX,
+      y: 2.24 - row * 0.96 + offsetY,
+      z: -6.78,
+      rotY: 0,
+      needsEaselStand: false,
+      zoneKey: 'memory_wall',
+    };
+  }
+
+  if (zone === 'toy_box' || target === 'toy_box') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: -3.55 + (col - 1) * 0.68 + offsetX,
+      y: 1.05 + row * 0.68 + offsetY,
+      z: 2.02,
+      rotY: 0.42,
+      needsEaselStand: false,
+      zoneKey: 'toy_box',
+    };
+  }
+
+  if (zone === 'bookshelf' || target === 'bookshelf') {
+    const col = slotInZone % 3;
+    const row = Math.floor(slotInZone / 3);
+    return {
+      x: -6.22 + offsetX,
+      y: 1.24 + row * 0.58 + offsetY,
+      z: -1.68 + col * 0.54,
+      rotY: Math.PI / 2,
+      needsEaselStand: false,
+      zoneKey: 'bookshelf',
+    };
+  }
+
+  if (zone === 'bedroom' || target === 'bedside_shelf' || target === 'wall_frame') {
     const col = slotInZone % 3;
     const row = Math.floor(slotInZone / 3);
     return {
@@ -1910,9 +1950,19 @@ export function buildExhibitionRoom3DScene(params: {
     cameraObstacleMeshes.push(cycWall);
   }
 
+  const bedroomMats = createChildhoodBedroomMaterialLibrary(maxAnisotropy, track);
+  const allowBedroomShadows =
+    !qualityConfig.isSoftwareGl &&
+    qualityConfig.profileId !== 'desktop_performance' &&
+    qualityConfig.profileId !== 'mobile_performance';
+
   // Only the Childhood category becomes an open-air park. Other categories keep
   // the original museum architecture and render order completely unchanged.
   let parkSeesawPivot: THREE.Object3D | null = null;
+  let bedroomSunDustPoints: THREE.Points | null = null;
+  let bedroomSunDustBasePos: Float32Array | null = null;
+  const galleryHemiScale = isChildhoodPark ? 0.34 : 1.0;
+  const galleryLightScale = isChildhoodPark ? 0.16 : 1.0;
   if (isChildhoodPark) {
     // Keep all room lights and the South entrance/exit archway in rootGroup so they
     // are never disabled by roomArchitectureGroup.visible = false.
@@ -1953,16 +2003,302 @@ export function buildExhibitionRoom3DScene(params: {
       if (hiddenShellObjects.has(cameraObstacleMeshes[i])) cameraObstacleMeshes.splice(i, 1);
     }
 
-    // Add warm open-air sunlight for the Childhood Memory Park meadow
-    const parkSunLight = new THREE.DirectionalLight(0xfff4dc, 1.15);
-    parkSunLight.position.set(6.5, 11.5, 4.5);
-    rootGroup.add(parkSunLight);
+    // Dial back generic museum-gallery ceiling washers in the Childhood Bedroom so
+    // the golden-hour directional window light, warm study lamp & accent spotlights
+    // sculpt crisp soft shadows without washing out walls or oak floorboards.
+    roomHemiLight.intensity = initRigTargets.hemiIntensity * galleryHemiScale;
+    centerCeilingLight.intensity =
+      (studioLightIntensityOverride ?? initRigTargets.centerIntensity) * galleryLightScale;
+    northWallWasher.intensity = initRigTargets.northIntensity * galleryLightScale;
+    westWallWasher.intensity = initRigTargets.sideWashIntensity * galleryLightScale;
+    eastWallWasher.intensity = initRigTargets.sideWashIntensity * galleryLightScale;
+    southEntryLight.intensity = initRigTargets.southEntryIntensity * galleryLightScale;
+
+    // -----------------------------------------------------------------------
+    // CHILDHOOD BEDROOM GOLDEN-HOUR LIGHTING RIG
+    // Warm golden-hour window light (#FFE5BE) + soft ambient fill (#F6EFE2) +
+    // subtle accent spotlights over trophy shelf, cork pinboard & study desk.
+    // -----------------------------------------------------------------------
+    const goldenHourWindowLight = new THREE.DirectionalLight('#FFE5BE', 2.15);
+    goldenHourWindowLight.position.set(-0.85, 5.2, -9.4);
+    goldenHourWindowLight.target.position.set(-4.35, 0.85, 0.45);
+    rootGroup.add(goldenHourWindowLight.target);
+    goldenHourWindowLight.castShadow = allowBedroomShadows;
+    const bedroomShadowSize = qualityConfig.tier === 'mobile' ? 1024 : 2048;
+    goldenHourWindowLight.shadow.mapSize.set(bedroomShadowSize, bedroomShadowSize);
+    goldenHourWindowLight.shadow.camera.left = -7.6;
+    goldenHourWindowLight.shadow.camera.right = 7.6;
+    goldenHourWindowLight.shadow.camera.top = 7.6;
+    goldenHourWindowLight.shadow.camera.bottom = -7.6;
+    goldenHourWindowLight.shadow.camera.near = 1.5;
+    goldenHourWindowLight.shadow.camera.far = 22;
+    goldenHourWindowLight.shadow.bias = -0.00025;
+    goldenHourWindowLight.shadow.normalBias = 0.018;
+    goldenHourWindowLight.shadow.radius = 3.2;
+    rootGroup.add(goldenHourWindowLight);
+
+    const bedroomAmbientFill = new THREE.AmbientLight('#F6EFE2', 0.38);
+    rootGroup.add(bedroomAmbientFill);
+
+    const bedroomInteriorBounce = new THREE.PointLight('#FFE8C4', 0.48, 12.0, 1.5);
+    bedroomInteriorBounce.position.set(-4.15, 2.75, 1.1);
+    bedroomInteriorBounce.castShadow = false;
+    rootGroup.add(bedroomInteriorBounce);
+
+    const addAccentSpotlight = (
+      from: [number, number, number],
+      to: [number, number, number],
+      intensity: number,
+      angle = 0.56,
+    ) => {
+      const spot = new THREE.SpotLight('#FFE6BC', intensity, 5.8, angle, 0.72, 1.6);
+      spot.position.set(from[0], from[1], from[2]);
+      spot.target.position.set(to[0], to[1], to[2]);
+      spot.castShadow = false;
+      rootGroup.add(spot.target);
+      rootGroup.add(spot);
+
+      // Subtle architectural brass mini-spotlight fixture mounted at the light source
+      const fixtureGroup = new THREE.Group();
+      fixtureGroup.position.set(from[0], from[1], from[2]);
+      fixtureGroup.lookAt(to[0], to[1], to[2]);
+      const can = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.028, 0.036, 0.085, 12)),
+        bedroomMats.matPolishedBrass,
+      );
+      can.rotation.x = Math.PI / 2;
+      fixtureGroup.add(can);
+      const lens = new THREE.Mesh(
+        track(new THREE.CircleGeometry(0.026, 12)),
+        track(
+          new THREE.MeshBasicMaterial({
+            color: '#FFF1D2',
+          }),
+        ),
+      );
+      lens.position.z = 0.044;
+      fixtureGroup.add(lens);
+      rootGroup.add(fixtureGroup);
+    };
+    // Subtle accent spotlight over Trophy & Certificate Shelf
+    addAccentSpotlight([-5.25, 3.05, 1.38], [-6.42, 1.38, 1.38], 1.55, 0.54);
+    // Subtle accent spotlight over Cork Pinboard
+    addAccentSpotlight([-3.55, 3.02, -5.05], [-3.55, 1.42, -6.28], 1.45, 0.58);
+    // Subtle accent spotlight over Study Desk & Retro PC
+    addAccentSpotlight([-4.55, 3.02, -3.75], [-5.25, 0.92, -4.65], 1.45, 0.56);
+
+    // -----------------------------------------------------------------------
+    // CHILDHOOD BEDROOM ALCOVE ARCHITECTURE
+    // Warm honey-oak floorboards (#B48452) + warm linen-plaster walls (#EAE2D3)
+    // + cream baseboards, dado chair rail, crown molding & open window cutout (#F4EFE6)
+    // -----------------------------------------------------------------------
+    const bedroomArchGroup = new THREE.Group();
+    bedroomArchGroup.name = 'childhood_bedroom_alcove_architecture';
+    rootGroup.add(bedroomArchGroup);
+
+    const addArchBox = (
+      w: number,
+      h: number,
+      d: number,
+      x: number,
+      y: number,
+      z: number,
+      mat: THREE.Material,
+      opts?: { cast?: boolean; receive?: boolean; cameraObstacle?: boolean },
+    ) => {
+      const m = new THREE.Mesh(track(new THREE.BoxGeometry(w, h, d)), mat);
+      m.position.set(x, y, z);
+      m.castShadow = opts?.cast ?? false;
+      m.receiveShadow = opts?.receive ?? true;
+      bedroomArchGroup.add(m);
+      if (opts?.cameraObstacle) cameraObstacleMeshes.push(m);
+      return m;
+    };
+
+    // Honey-Oak Floorboard Deck (sits at y = 0.016 above park meadow, clears circular toy train track at x = -1.62)
+    addArchBox(5.06, 0.024, 13.18, -4.31, 0.004, -0.07, bedroomMats.matHoneyOakFloor, {
+      cast: false,
+      receive: true,
+    });
+    // North window alcove floor bay (x: -1.78 .. -0.94, z: -6.66 .. -4.30)
+    addArchBox(0.84, 0.024, 2.36, -1.36, 0.004, -5.48, bedroomMats.matHoneyOakFloor, {
+      cast: false,
+      receive: true,
+    });
+    // South alcove floor bay under vintage TV & memory radio (x: -1.78 .. -1.24, z: 2.20 .. 6.52)
+    addArchBox(0.54, 0.024, 4.32, -1.51, 0.004, 4.36, bedroomMats.matHoneyOakFloor, {
+      cast: false,
+      receive: true,
+    });
+    // Subtle beveled oak floor threshold border along open edge
+    addArchBox(0.06, 0.018, 6.5, -1.77, 0.009, -1.05, bedroomMats.matBedWalnut, {
+      cast: false,
+      receive: true,
+    });
+
+    const alcoveWallH = 3.36;
+    const wallT = 0.12;
+    // West Linen-Plaster Wall (inner face at x = -6.78, z: -6.68 .. 6.52)
+    addArchBox(wallT, alcoveWallH, 13.26, -6.84, alcoveWallH * 0.5, -0.08, bedroomMats.matLinenWall, {
+      cast: true,
+      receive: true,
+      cameraObstacle: true,
+    });
+    // West Wall Cream Trim: Baseboard, Chair Rail & Crown Molding
+    addArchBox(0.03, 0.14, 13.16, -6.765, 0.086, -0.08, bedroomMats.matCreamTrim, { receive: true });
+    addArchBox(0.035, 0.055, 13.16, -6.762, 0.94, -0.08, bedroomMats.matCreamTrim, { receive: true });
+    addArchBox(0.07, 0.11, 13.22, -6.745, alcoveWallH - 0.055, -0.08, bedroomMats.matCreamTrim, {
+      cast: true,
+      receive: true,
+    });
+
+    // South-West Linen-Plaster Wall (inner face at z = 6.48, x: -6.84 .. -1.22)
+    addArchBox(5.68, alcoveWallH, wallT, -4.03, alcoveWallH * 0.5, 6.54, bedroomMats.matLinenWall, {
+      cast: true,
+      receive: true,
+      cameraObstacle: true,
+    });
+    addArchBox(5.6, 0.14, 0.03, -4.02, 0.086, 6.465, bedroomMats.matCreamTrim, { receive: true });
+    addArchBox(5.6, 0.055, 0.035, -4.02, 0.94, 6.462, bedroomMats.matCreamTrim, { receive: true });
+    addArchBox(5.66, 0.11, 0.07, -4.02, alcoveWallH - 0.055, 6.445, bedroomMats.matCreamTrim, {
+      cast: true,
+      receive: true,
+    });
+    // Finished vertical cream pilaster cap at SW wall open edge
+    addArchBox(0.14, alcoveWallH, 0.15, -1.22, alcoveWallH * 0.5, 6.53, bedroomMats.matCreamTrim, {
+      cast: true,
+      receive: true,
+    });
+
+    // North-West Linen-Plaster Wall (inner face at z = -6.62, x: -6.84 .. -0.94)
+    // Built with a genuine open architectural window cutout at x in [-2.78, -1.12], y in [0.96, 2.48]
+    addArchBox(4.08, alcoveWallH, wallT, -4.82, alcoveWallH * 0.5, -6.68, bedroomMats.matLinenWall, {
+      cast: true,
+      receive: true,
+      cameraObstacle: true,
+    });
+    addArchBox(0.22, alcoveWallH, wallT, -1.03, alcoveWallH * 0.5, -6.68, bedroomMats.matLinenWall, {
+      cast: true,
+      receive: true,
+      cameraObstacle: true,
+    });
+    // Under-window sill wall & over-window lintel
+    addArchBox(1.68, 0.96, wallT, -1.95, 0.48, -6.68, bedroomMats.matLinenWall, {
+      cast: true,
+      receive: true,
+    });
+    addArchBox(1.68, alcoveWallH - 2.48, wallT, -1.95, 2.48 + (alcoveWallH - 2.48) * 0.5, -6.68, bedroomMats.matLinenWall, {
+      cast: true,
+      receive: true,
+    });
+    // North-West Cream Baseboard, Chair Rail (left of window), Crown & Window Casing Sill/Trim
+    addArchBox(5.86, 0.14, 0.03, -3.88, 0.086, -6.605, bedroomMats.matCreamTrim, { receive: true });
+    addArchBox(4.02, 0.055, 0.035, -4.78, 0.94, -6.602, bedroomMats.matCreamTrim, { receive: true });
+    addArchBox(5.92, 0.11, 0.07, -3.88, alcoveWallH - 0.055, -6.585, bedroomMats.matCreamTrim, {
+      cast: true,
+      receive: true,
+    });
+    // Cream window sill, lintel header & side jamb casings framing the sunlit park view
+    addArchBox(1.86, 0.06, 0.2, -1.95, 0.95, -6.62, bedroomMats.matCreamTrim, { cast: true, receive: true });
+    addArchBox(1.86, 0.075, 0.16, -1.95, 2.51, -6.64, bedroomMats.matCreamTrim, { cast: true, receive: true });
+    addArchBox(0.075, 1.56, 0.16, -2.79, 1.72, -6.64, bedroomMats.matCreamTrim, { cast: true, receive: true });
+    addArchBox(0.075, 1.56, 0.16, -1.11, 1.72, -6.64, bedroomMats.matCreamTrim, { cast: true, receive: true });
+    // Finished vertical cream pilaster cap at NW wall open edge
+    addArchBox(0.14, alcoveWallH, 0.15, -0.94, alcoveWallH * 0.5, -6.67, bedroomMats.matCreamTrim, {
+      cast: true,
+      receive: true,
+    });
+
+    // Soft grounded ambient-occlusion contact shadows beneath major bedroom furniture
+    const contactShadowMat = track(
+      new THREE.MeshBasicMaterial({
+        map: bedroomMats.contactShadowTex,
+        transparent: true,
+        opacity: 0.34,
+        depthWrite: false,
+      }),
+    );
+    const addContactShadow = (x: number, z: number, w: number, d: number, rotY = 0) => {
+      const cs = new THREE.Mesh(track(new THREE.PlaneGeometry(w, d)), contactShadowMat);
+      cs.rotation.x = -Math.PI / 2;
+      cs.rotation.z = rotY;
+      cs.position.set(x, 0.0175, z);
+      cs.castShadow = false;
+      cs.receiveShadow = false;
+      bedroomArchGroup.add(cs);
+    };
+    addContactShadow(-5.05, 3.65, 2.25, 1.72, 0); // Wooden Bed
+    addContactShadow(-4.35, 6.08, 1.28, 0.78, 0); // Wardrobe
+    addContactShadow(-5.85, 2.45, 0.66, 0.66, 0); // Nightstand
+    addContactShadow(-2.95, 6.02, 1.05, 0.65, 0); // Vintage TV Stand
+    addContactShadow(-5.25, -4.65, 1.65, 1.02, Math.PI * 0.36); // Study Desk
+    addContactShadow(-6.56, -1.15, 0.72, 1.92, 0); // Childhood Bookshelf
+    addContactShadow(-6.48, 1.38, 0.58, 1.56, 0); // Trophy Shelf
+
+    // Subtle Golden-Hour Window Sunlight Shaft & Drifting Dust Motes streaming from NW Window
+    const sunbeamMat = track(
+      new THREE.MeshBasicMaterial({
+        map: bedroomMats.sunbeamGradTex,
+        color: '#FFE6BE',
+        transparent: true,
+        opacity: 0.11,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    const sunbeamPlaneA = new THREE.Mesh(track(new THREE.PlaneGeometry(1.75, 4.4)), sunbeamMat);
+    sunbeamPlaneA.position.set(-2.65, 1.28, -4.95);
+    sunbeamPlaneA.rotation.set(0.76, -0.34, 0.24);
+    sunbeamPlaneA.castShadow = false;
+    sunbeamPlaneA.receiveShadow = false;
+    bedroomArchGroup.add(sunbeamPlaneA);
+
+    const sunbeamPlaneB = new THREE.Mesh(track(new THREE.PlaneGeometry(1.55, 4.1)), sunbeamMat);
+    sunbeamPlaneB.position.set(-2.72, 1.22, -4.88);
+    sunbeamPlaneB.rotation.set(0.76, 0.42, -0.18);
+    sunbeamPlaneB.castShadow = false;
+    sunbeamPlaneB.receiveShadow = false;
+    bedroomArchGroup.add(sunbeamPlaneB);
+
+    if (!isPerfRoomProfile && !qualityConfig.isSoftwareGl) {
+      const moteCount = qualityConfig.tier === 'mobile' ? 18 : 34;
+      const motePositions = new Float32Array(moteCount * 3);
+      bedroomSunDustBasePos = new Float32Array(moteCount * 3);
+      for (let i = 0; i < moteCount; i++) {
+        const t = (i + 0.5) / moteCount;
+        const bx = -1.95 - t * 1.65 + (Math.sin(i * 12.7) * 0.48);
+        const by = 0.45 + (1 - t) * 1.75 + (Math.cos(i * 7.3) * 0.26);
+        const bz = -6.25 + t * 2.85 + (Math.sin(i * 5.9) * 0.42);
+        motePositions[i * 3] = bx;
+        motePositions[i * 3 + 1] = by;
+        motePositions[i * 3 + 2] = bz;
+        bedroomSunDustBasePos[i * 3] = bx;
+        bedroomSunDustBasePos[i * 3 + 1] = by;
+        bedroomSunDustBasePos[i * 3 + 2] = bz;
+      }
+      const moteGeo = track(new THREE.BufferGeometry());
+      moteGeo.setAttribute('position', new THREE.BufferAttribute(motePositions, 3));
+      const moteMat = track(
+        new THREE.PointsMaterial({
+          color: '#FFF0CE',
+          size: 0.028,
+          transparent: true,
+          opacity: 0.42,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      bedroomSunDustPoints = new THREE.Points(moteGeo, moteMat);
+      bedroomSunDustPoints.castShadow = false;
+      bedroomArchGroup.add(bedroomSunDustPoints);
+    }
 
     const builtPark = buildChildhoodParkEnvironment({
       root: rootGroup,
       track,
       cameraObstacleMeshes,
-      enableShadows: qualityConfig.enableShadows,
+      enableShadows: allowBedroomShadows,
     });
     parkSeesawPivot = (builtPark.userData?.seesawPivot as THREE.Object3D) || null;
   }
@@ -4252,6 +4588,7 @@ export function buildExhibitionRoom3DScene(params: {
 
   const interactiveObjectGroups: Record<InteractiveObjectId3D, THREE.Group> = {
     toy_chest: new THREE.Group(),
+    bookshelf: new THREE.Group(),
     toy_train: new THREE.Group(),
     tyre_swing: new THREE.Group(),
     bicycle: new THREE.Group(),
@@ -4280,6 +4617,7 @@ export function buildExhibitionRoom3DScene(params: {
 
   const interactiveStates: Record<InteractiveObjectId3D, boolean> = {
     toy_chest: false,
+    bookshelf: false,
     toy_train: true, // Train chugs around central tree plinth by default
     tyre_swing: false,
     bicycle: false,
@@ -4308,6 +4646,7 @@ export function buildExhibitionRoom3DScene(params: {
 
   const interactiveAnimTimers: Record<InteractiveObjectId3D, number> = {
     toy_chest: 0,
+    bookshelf: 0,
     toy_train: 0,
     tyre_swing: 0,
     bicycle: 0,
@@ -4334,20 +4673,27 @@ export function buildExhibitionRoom3DScene(params: {
     drawing_wall: 0,
   };
 
-  // Match uploaded memories to interactive 3D objects by explicit linkedObjectId or keywords
+  // Match uploaded memories to interactive 3D objects by explicit linkedObjectId, zone, or keywords
   const findLinkedMemoryForObject = (
     objectId: InteractiveObjectId3D,
     keywords: RegExp,
   ): Memory | undefined => {
-    // Only attach a memory when the user or AI explicitly linked it, or when
-    // its own metadata contains a relevant keyword. Never attach an unrelated
-    // memory just because it happens to occupy a fallback array position.
-    const explicit = memories.find((m) => m.linkedObjectId === objectId);
+    const explicit = memories.find(
+      (m) =>
+        !m.hiddenFrom3D &&
+        (m.linkedObjectId === objectId ||
+          (objectId === 'toy_chest' && m.curatedZoneId === 'toy_box') ||
+          (objectId === 'bookshelf' && m.curatedZoneId === 'bookshelf') ||
+          (objectId === 'study_desk' && m.curatedZoneId === 'study_corner') ||
+          (objectId === 'cork_pinboard' && m.curatedZoneId === 'memory_wall')),
+    );
     if (explicit) return explicit;
-    return memories.find((m) =>
-      keywords.test(
-        `${m.title} ${m.description} ${m.story} ${(m.tags || []).join(' ')} ${m.linked3DObject || ''}`.toLowerCase(),
-      ),
+    return memories.find(
+      (m) =>
+        !m.hiddenFrom3D &&
+        keywords.test(
+          `${m.title} ${m.description} ${m.story} ${(m.tags || []).join(' ')} ${m.linked3DObject || ''}`.toLowerCase(),
+        ),
     );
   };
 
@@ -4387,16 +4733,33 @@ export function buildExhibitionRoom3DScene(params: {
   let wardrobeDoorPivot: THREE.Group | null = null;
   let bedroomTvScreenMat: THREE.MeshStandardMaterial | null = null;
   const matBedBlanket = track(
-    new THREE.MeshStandardMaterial({ color: '#C87A5B', roughness: 0.78 }),
+    new THREE.MeshStandardMaterial({
+      color: '#C87A5B',
+      map: bedroomMats.matCottonSheet.map,
+      bumpMap: bedroomMats.matCottonSheet.bumpMap,
+      bumpScale: 0.012,
+      roughness: 0.86,
+      metalness: 0.0,
+    }),
   );
   const matWardrobeDoor = track(
-    new THREE.MeshStandardMaterial({ color: '#5A3E2B', roughness: 0.45 }),
+    new THREE.MeshStandardMaterial({
+      map: bedroomMats.matBedWalnut.map,
+      bumpMap: bedroomMats.matBedWalnut.bumpMap,
+      bumpScale: 0.008,
+      color: '#6B4A32',
+      roughness: 0.62,
+      metalness: 0.02,
+    }),
   );
   const matStudyDeskTop = track(
     new THREE.MeshStandardMaterial({
-      map: walnutTex,
+      map: bedroomMats.matDeskWood.map,
+      bumpMap: bedroomMats.matDeskWood.bumpMap,
+      bumpScale: 0.008,
       color: '#FFFFFF',
-      roughness: 0.34,
+      roughness: 0.6,
+      metalness: 0.02,
     }),
   );
   const bedCanopyGroup = new THREE.Group();
@@ -4411,159 +4774,486 @@ export function buildExhibitionRoom3DScene(params: {
   rootGroup.add(bedroomPostersGroup);
   {
     // SPACE A: CHILDHOOD BEDROOM ALCOVE (South-West Alcove: x = -5.05, z = 3.65)
-    // Positioned cleanly in the SW corner so it never overlaps the West Memory Wall (z = -2.97..+0.67)
+    // Solid Walnut/Oak Bed Frame (#6B4A32, roughness ~0.62) with CLEAR OPEN UNDER-BED SPACE
     const bedGroup = interactiveObjectGroups.wooden_bed;
     bedGroup.position.set(-5.05, 0, 3.65);
     bedGroup.rotation.y = Math.PI / 2;
     spaceGroups.bedroom.add(bedGroup);
 
-    const bedFrame = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.45, 0.34, 1.95)),
-      matWalnut,
-    );
-    bedFrame.position.set(0, 0.19, 0);
-    bedFrame.castShadow = true;
-    bedGroup.add(bedFrame);
-    cameraObstacleMeshes.push(bedFrame);
+    const bedWoodMat = bedroomMats.matBedWalnut;
 
-    const headboard = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.48, 0.96, 0.12)),
-      matWalnut,
+    // 4 Solid Turned/Tapered Corner Bed Posts planted flush on floorboards (leaving y = 0..0.24 completely open!)
+    [
+      [-0.69, -0.93],
+      [0.69, -0.93],
+      [-0.69, 0.93],
+      [0.69, 0.93],
+    ].forEach(([lx, lz]) => {
+      const postH = lz < 0 ? 1.04 : 0.56;
+      const legPost = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.085, postH, 0.085)),
+        bedWoodMat,
+      );
+      legPost.position.set(lx, postH * 0.5, lz);
+      bedGroup.add(legPost);
+
+      const finial = new THREE.Mesh(
+        track(new THREE.SphereGeometry(0.048, 12, 10)),
+        bedWoodMat,
+      );
+      finial.position.set(lx, postH + 0.032, lz);
+      bedGroup.add(finial);
+    });
+
+    // Raised Perimeter Bed Rails (y = 0.24..0.36) so the under-bed cavity is open & shadowed around scrapbook & flashlight
+    const leftRail = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.055, 0.12, 1.84)),
+      bedWoodMat,
     );
-    headboard.position.set(0, 0.52, -0.92);
+    leftRail.position.set(-0.69, 0.3, 0);
+    bedGroup.add(leftRail);
+    cameraObstacleMeshes.push(leftRail);
+
+    const rightRail = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.055, 0.12, 1.84)),
+      bedWoodMat,
+    );
+    rightRail.position.set(0.69, 0.3, 0);
+    bedGroup.add(rightRail);
+    cameraObstacleMeshes.push(rightRail);
+
+    const footRail = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.42, 0.24, 0.065)),
+      bedWoodMat,
+    );
+    footRail.position.set(0, 0.38, 0.93);
+    bedGroup.add(footRail);
+    cameraObstacleMeshes.push(footRail);
+
+    const footCap = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.48, 0.05, 0.095)),
+      bedWoodMat,
+    );
+    footCap.position.set(0, 0.52, 0.93);
+    bedGroup.add(footCap);
+
+    // Recessed Under-Mattress Wooden Support Slats (y = 0.29)
+    for (let s = 0; s < 6; s++) {
+      const slat = new THREE.Mesh(
+        track(new THREE.BoxGeometry(1.32, 0.025, 0.11)),
+        bedWoodMat,
+      );
+      slat.position.set(0, 0.29, -0.74 + s * 0.295);
+      bedGroup.add(slat);
+    }
+
+    // Paneled Craftsman Headboard with top molding rail
+    const headboard = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.36, 0.72, 0.07)),
+      bedWoodMat,
+    );
+    headboard.position.set(0, 0.64, -0.93);
     bedGroup.add(headboard);
     cameraObstacleMeshes.push(headboard);
+
+    const headboardCap = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.5, 0.065, 0.115)),
+      bedWoodMat,
+    );
+    headboardCap.position.set(0, 1.02, -0.93);
+    bedGroup.add(headboardCap);
+
+    [-0.36, 0.36].forEach((px) => {
+      const insetPanel = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.56, 0.44, 0.025)),
+        matWardrobeDoor,
+      );
+      insetPanel.position.set(px, 0.68, -0.89);
+      bedGroup.add(insetPanel);
+    });
 
     // Optional Cozy 4-Poster Canopy Frame (toggled when bedDesign === 'cozy_canopy')
     bedGroup.add(bedCanopyGroup);
     [
-      [-0.68, -0.9],
-      [0.68, -0.9],
-      [-0.68, 0.9],
-      [0.68, 0.9],
+      [-0.69, -0.93],
+      [0.69, -0.93],
+      [-0.69, 0.93],
+      [0.69, 0.93],
     ].forEach(([px, pz]) => {
       const post = new THREE.Mesh(
         track(new THREE.CylinderGeometry(0.032, 0.032, 1.85, 10)),
-        matWalnut,
+        bedWoodMat,
       );
       post.position.set(px, 0.95, pz);
       bedCanopyGroup.add(post);
     });
     const canopyRoof = new THREE.Mesh(
       track(new THREE.BoxGeometry(1.46, 0.06, 1.92)),
-      matBoucleFabric,
+      bedroomMats.matCottonSheet,
     );
     canopyRoof.position.set(0, 1.88, 0);
     bedCanopyGroup.add(canopyRoof);
 
+    // Layered Cotton Mattress & Fitted Sheet
     const mattress = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.34, 0.22, 1.82)),
-      track(new THREE.MeshStandardMaterial({ color: '#FAF4E8', roughness: 0.72 })),
+      track(new THREE.BoxGeometry(1.32, 0.21, 1.8)),
+      bedroomMats.matCottonSheet,
     );
-    mattress.position.set(0, 0.42, 0.02);
+    mattress.position.set(0, 0.415, 0);
     bedGroup.add(mattress);
 
-    const blanket = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.36, 0.24, 1.18)),
-      matBedBlanket,
+    // Crisp Folded-Back Top Cotton Sheet Cuff across upper bed
+    const foldedSheetCuff = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.37, 0.055, 0.26)),
+      bedroomMats.matCottonPillow,
     );
-    blanket.position.set(0, 0.43, 0.32);
+    foldedSheetCuff.position.set(0, 0.525, -0.22);
+    foldedSheetCuff.rotation.x = 0.05;
+    bedGroup.add(foldedSheetCuff);
+
+    // Sculpted Softly Folded Cotton Duvet Blanket with organic ripples & draped side overhangs
+    const blanketTopGeo = track(new THREE.BoxGeometry(1.38, 0.11, 1.24, 14, 2, 14));
+    const bPos = blanketTopGeo.attributes.position;
+    for (let i = 0; i < bPos.count; i++) {
+      const vx = bPos.getX(i);
+      const vy = bPos.getY(i);
+      const vz = bPos.getZ(i);
+      if (vy > 0) {
+        const fold =
+          Math.sin(vx * 5.2 + vz * 2.1) * 0.014 +
+          Math.cos(vz * 4.4 - vx * 1.8) * 0.011;
+        const edgeRoll = -0.022 * Math.pow(Math.abs(vx) / 0.69, 3);
+        bPos.setY(i, vy + fold + edgeRoll);
+      }
+    }
+    blanketTopGeo.computeVertexNormals();
+    const blanket = new THREE.Mesh(blanketTopGeo, matBedBlanket);
+    blanket.position.set(0, 0.505, 0.31);
     bedGroup.add(blanket);
 
-    // Cozy Woven Bedroom & Playroom Rugs (toggled via showRugs)
-    const bedRug = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(1.35, 1.35, 0.014, 32)),
-      matWovenLinenRug,
+    // Soft Side Drapes of the duvet hanging naturally over the mattress edges
+    [-0.7, 0.7].forEach((sideX) => {
+      const drape = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.042, 0.24, 1.22)),
+        matBedBlanket,
+      );
+      drape.position.set(sideX, 0.41, 0.31);
+      bedGroup.add(drape);
+    });
+    const footDrape = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.4, 0.22, 0.045)),
+      matBedBlanket,
     );
-    bedRug.position.set(-4.65, 0.008, 3.65);
+    footDrape.position.set(0, 0.41, 0.91);
+    bedGroup.add(footDrape);
+
+    // Textured Cream Wool Bedroom Rug (#E7DEC9, roughness ~0.95) sitting flush on oak floorboards
+    const bedRug = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(1.42, 1.44, 0.014, 40)),
+      bedroomMats.matCreamWoolRug,
+    );
+    bedRug.position.set(-4.65, 0.023, 3.65);
+    bedRug.castShadow = false;
+    bedRug.receiveShadow = true;
     bedroomRugsGroup.add(bedRug);
 
-    const playRug = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(1.05, 1.05, 0.014, 32)),
-      track(new THREE.MeshStandardMaterial({ color: '#DFC5A5', roughness: 0.9 })),
+    const bedRugBorder = new THREE.Mesh(
+      track(new THREE.TorusGeometry(1.41, 0.009, 6, 48)),
+      bedroomMats.matCottonSheet,
     );
-    playRug.position.set(-3.35, 0.008, 2.55);
+    bedRugBorder.rotation.x = Math.PI / 2;
+    bedRugBorder.position.set(-4.65, 0.028, 3.65);
+    bedRugBorder.castShadow = false;
+    bedRugBorder.receiveShadow = true;
+    bedroomRugsGroup.add(bedRugBorder);
+
+    const playRug = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(1.06, 1.08, 0.014, 36)),
+      bedroomMats.matPlayWoolRug,
+    );
+    playRug.position.set(-3.35, 0.023, 2.55);
+    playRug.castShadow = false;
+    playRug.receiveShadow = true;
     bedroomRugsGroup.add(playRug);
 
-    // Decorative Floor Cushions neatly beside the play rug (toggled via showCushions)
+    // Decorative Piped Floor Cushions neatly beside the play rug (toggled via showCushions)
     [
-      { x: -3.65, z: 2.35, color: '#D67A5C' },
-      { x: -3.15, z: 2.75, color: '#6E8B74' },
-      { x: -3.55, z: 2.85, color: '#D9A05B' },
+      { x: -3.65, z: 2.35, color: '#C66F52' },
+      { x: -3.15, z: 2.75, color: '#637F69' },
+      { x: -3.55, z: 2.85, color: '#CFA05A' },
     ].forEach((c) => {
+      const cushGeo = track(new THREE.SphereGeometry(0.25, 20, 14));
+      cushGeo.scale(1.0, 0.36, 1.0);
       const cush = new THREE.Mesh(
-        track(new THREE.CylinderGeometry(0.24, 0.26, 0.1, 20)),
-        track(new THREE.MeshStandardMaterial({ color: c.color, roughness: 0.82 })),
+        cushGeo,
+        track(
+          new THREE.MeshStandardMaterial({
+            color: c.color,
+            bumpMap: bedroomMats.matCottonSheet.bumpMap,
+            bumpScale: 0.01,
+            roughness: 0.9,
+          }),
+        ),
       );
-      cush.position.set(c.x, 0.05, c.z);
+      cush.position.set(c.x, 0.088, c.z);
       bedroomCushionsGroup.add(cush);
-    });
 
-    // Framed Childhood Wall Posters on the SW bedroom wall (replaces protruding red wall box)
-    [
-      { x: -halfW + 0.25, y: 2.45, z: 3.25, color: '#547A8C' },
-      { x: -halfW + 0.25, y: 2.45, z: 4.15, color: '#D6A15D' },
-    ].forEach((poster) => {
-      const posterMesh = new THREE.Mesh(
-        track(new THREE.BoxGeometry(0.03, 0.62, 0.48)),
-        track(new THREE.MeshStandardMaterial({ color: poster.color, roughness: 0.55 })),
+      const tuftBtn = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.022, 0.022, 0.014, 10)),
+        bedroomMats.matCottonSheet,
       );
-      posterMesh.position.set(poster.x, poster.y, poster.z);
-      bedroomPostersGroup.add(posterMesh);
+      tuftBtn.position.set(c.x, 0.172, c.z);
+      bedroomCushionsGroup.add(tuftBtn);
     });
 
-    // Warm Bedside Nightstand Lamp in the SW bedroom alcove (toggled via showLamps)
-    const nightstandLamp = new THREE.Group();
-    nightstandLamp.position.set(-5.85, 0, 2.45);
-    bedroomLampsGroup.add(nightstandLamp);
-    const standTable = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.44, 0.54, 0.44)),
-      matWalnut,
-    );
-    standTable.position.set(0, 0.27, 0);
-    nightstandLamp.add(standTable);
-    const standShade = new THREE.Mesh(
-      track(new THREE.ConeGeometry(0.16, 0.22, 16)),
+    // Framed Childhood Wall Posters on the West linen-plaster wall + Vintage Wall Stickers
+    [
+      { x: -6.75, y: 2.35, z: 3.18, tex: bedroomMats.posterStarChartTex },
+      { x: -6.75, y: 2.35, z: 4.18, tex: bedroomMats.posterAdventureTex },
+    ].forEach((poster) => {
+      const pFrameGroup = new THREE.Group();
+      pFrameGroup.position.set(poster.x, poster.y, poster.z);
+      const frameBox = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.036, 0.68, 0.54)),
+        bedWoodMat,
+      );
+      pFrameGroup.add(frameBox);
+      const printPlane = new THREE.Mesh(
+        track(new THREE.PlaneGeometry(0.46, 0.6)),
+        track(
+          new THREE.MeshStandardMaterial({
+            map: poster.tex,
+            roughness: 0.42,
+            metalness: 0.02,
+          }),
+        ),
+      );
+      printPlane.rotation.y = Math.PI / 2;
+      printPlane.position.x = 0.02;
+      pFrameGroup.add(printPlane);
+      bedroomPostersGroup.add(pFrameGroup);
+    });
+
+    // Matte Paper Childhood Wall Stickers (stars, moon, planet, rocket, kite) on West bedroom wall
+    const wallStickersPlane = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(1.85, 0.85)),
       track(
         new THREE.MeshStandardMaterial({
-          color: '#FFF3D6',
-          emissive: new THREE.Color('#FFD996'),
-          emissiveIntensity: 0.65,
+          map: bedroomMats.wallStickerSheetTex,
+          transparent: true,
+          alphaTest: 0.08,
+          roughness: 0.78,
+          metalness: 0.0,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
         }),
       ),
     );
-    standShade.position.set(0, 0.7, 0);
+    wallStickersPlane.rotation.y = Math.PI / 2;
+    wallStickersPlane.position.set(-6.768, 1.56, 3.68);
+    bedroomPostersGroup.add(wallStickersPlane);
+
+    // Warm Bedside Nightstand & Pleated Lamp in the SW bedroom alcove (toggled via showLamps)
+    const nightstandLamp = new THREE.Group();
+    nightstandLamp.position.set(-5.85, 0, 2.45);
+    bedroomLampsGroup.add(nightstandLamp);
+
+    // 4 Nightstand legs flush on floorboards
+    [
+      [-0.19, -0.19],
+      [0.19, -0.19],
+      [-0.19, 0.19],
+      [0.19, 0.19],
+    ].forEach(([nx, nz]) => {
+      const nLeg = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.02, 0.015, 0.52, 8)),
+        bedWoodMat,
+      );
+      nLeg.position.set(nx, 0.26, nz);
+      nightstandLamp.add(nLeg);
+    });
+    const standCabinet = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.44, 0.28, 0.42)),
+      bedWoodMat,
+    );
+    standCabinet.position.set(0, 0.37, 0);
+    nightstandLamp.add(standCabinet);
+    const standTop = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.48, 0.035, 0.46)),
+      bedWoodMat,
+    );
+    standTop.position.set(0, 0.525, 0);
+    nightstandLamp.add(standTop);
+
+    // Turned brass lamp base & glowing linen drum shade
+    const lampFoot = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.065, 0.082, 0.032, 16)),
+      bedroomMats.matPolishedBrass,
+    );
+    lampFoot.position.set(0, 0.558, 0);
+    nightstandLamp.add(lampFoot);
+    const lampStem = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.016, 0.022, 0.17, 12)),
+      bedroomMats.matPolishedBrass,
+    );
+    lampStem.position.set(0, 0.65, 0);
+    nightstandLamp.add(lampStem);
+    const standShade = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.115, 0.165, 0.21, 20, 1, true)),
+      track(
+        new THREE.MeshStandardMaterial({
+          color: '#FFF2D4',
+          emissive: new THREE.Color('#FFD28E'),
+          emissiveIntensity: 0.72,
+          roughness: 0.85,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    );
+    standShade.position.set(0, 0.78, 0);
     nightstandLamp.add(standShade);
 
+    const bedsideGlowLight = new THREE.PointLight('#FFD28E', 0.78, 3.4, 1.7);
+    bedsideGlowLight.position.set(0, 0.74, 0);
+    bedsideGlowLight.castShadow = false;
+    nightstandLamp.add(bedsideGlowLight);
+
+    // Sculpted Soft Cotton Pillows with subtle pinched folds inside bedPillowBounceGroup
     bedPillowBounceGroup = new THREE.Group();
-    bedPillowBounceGroup.position.set(0, 0.56, -0.58);
+    bedPillowBounceGroup.position.set(0, 0.585, -0.6);
     bedGroup.add(bedPillowBounceGroup);
 
-    [-0.32, 0.32].forEach((px) => {
-      const pillow = new THREE.Mesh(
-        track(new THREE.BoxGeometry(0.52, 0.12, 0.34)),
-        track(new THREE.MeshStandardMaterial({ color: '#FFFDF8', roughness: 0.65 })),
-      );
-      pillow.position.set(px, 0, 0);
+    const makePillowGeo = () => {
+      const g = track(new THREE.SphereGeometry(0.29, 18, 14));
+      const p = g.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i);
+        const y = p.getY(i);
+        const z = p.getZ(i);
+        // Sculpt soft pinched pillow silhouette
+        const sx = x * 1.02;
+        const sy = y * 0.34 * (1 - 0.18 * (x * x + z * z));
+        const sz = z * 0.68;
+        const crease = Math.sin(x * 11) * 0.006 * (y > 0 ? 1 : -0.5);
+        p.setXYZ(i, sx, sy + crease, sz);
+      }
+      g.computeVertexNormals();
+      return g;
+    };
+    const pillowGeo = makePillowGeo();
+
+    [-0.31, 0.31].forEach((px, pIdx) => {
+      const pillow = new THREE.Mesh(pillowGeo, bedroomMats.matCottonPillow);
+      pillow.position.set(px, 0, pIdx === 0 ? -0.01 : 0.01);
+      pillow.rotation.set(0.18, pIdx === 0 ? 0.06 : -0.07, 0);
       bedPillowBounceGroup!.add(pillow);
     });
 
-    // Little Teddy Bear sitting on the bed pillow
+    // Multi-Part Plush Childhood Teddy Bear resting snugly on the pillows
+    const bedTeddyGroup = new THREE.Group();
+    bedTeddyGroup.position.set(0, 0.06, 0.11);
+    bedTeddyGroup.rotation.y = 0.12;
+    bedPillowBounceGroup.add(bedTeddyGroup);
+
     const bedTeddyMat = track(
-      new THREE.MeshStandardMaterial({ color: '#B87B44', roughness: 0.8 }),
+      new THREE.MeshStandardMaterial({
+        color: '#A96D3B',
+        bumpMap: bedroomMats.matCreamWoolRug.bumpMap,
+        bumpScale: 0.014,
+        roughness: 0.92,
+      }),
     );
+    const bedTeddyMuzzleMat = track(
+      new THREE.MeshStandardMaterial({ color: '#E3C69E', roughness: 0.88 }),
+    );
+    const bedTeddyButtonMat = track(
+      new THREE.MeshStandardMaterial({ color: '#221812', roughness: 0.25 }),
+    );
+    const bedTeddyRibbonMat = track(
+      new THREE.MeshStandardMaterial({ color: '#9E322C', roughness: 0.62 }),
+    );
+
     const bedTeddyBody = new THREE.Mesh(
-      track(new THREE.SphereGeometry(0.12, 14, 14)),
+      track(new THREE.SphereGeometry(0.115, 16, 14)),
       bedTeddyMat,
     );
-    bedTeddyBody.position.set(0, 0.14, 0.08);
-    bedPillowBounceGroup.add(bedTeddyBody);
+    bedTeddyBody.scale.set(0.95, 1.08, 0.88);
+    bedTeddyBody.position.set(0, 0.11, 0);
+    bedTeddyGroup.add(bedTeddyBody);
+
+    const teddyBelly = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.072, 12, 10)),
+      bedTeddyMuzzleMat,
+    );
+    teddyBelly.scale.set(0.9, 1.0, 0.45);
+    teddyBelly.position.set(0, 0.1, 0.082);
+    bedTeddyGroup.add(teddyBelly);
+
     const bedTeddyHead = new THREE.Mesh(
-      track(new THREE.SphereGeometry(0.095, 14, 14)),
+      track(new THREE.SphereGeometry(0.092, 16, 14)),
       bedTeddyMat,
     );
-    bedTeddyHead.position.set(0, 0.29, 0.08);
-    bedPillowBounceGroup.add(bedTeddyHead);
+    bedTeddyHead.position.set(0, 0.265, 0.01);
+    bedTeddyGroup.add(bedTeddyHead);
+
+    const teddySnout = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.038, 12, 10)),
+      bedTeddyMuzzleMat,
+    );
+    teddySnout.scale.set(1.1, 0.85, 0.95);
+    teddySnout.position.set(0, 0.248, 0.088);
+    bedTeddyGroup.add(teddySnout);
+
+    const teddyNose = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.014, 10, 8)),
+      bedTeddyButtonMat,
+    );
+    teddyNose.position.set(0, 0.258, 0.122);
+    bedTeddyGroup.add(teddyNose);
+
+    [-0.032, 0.032].forEach((ex) => {
+      const eye = new THREE.Mesh(
+        track(new THREE.SphereGeometry(0.011, 8, 8)),
+        bedTeddyButtonMat,
+      );
+      eye.position.set(ex, 0.282, 0.084);
+      bedTeddyGroup.add(eye);
+    });
+    [-0.068, 0.068].forEach((ex) => {
+      const ear = new THREE.Mesh(
+        track(new THREE.SphereGeometry(0.034, 10, 10)),
+        bedTeddyMat,
+      );
+      ear.scale.set(1, 1, 0.6);
+      ear.position.set(ex, 0.345, -0.005);
+      bedTeddyGroup.add(ear);
+    });
+    [-0.1, 0.1].forEach((ax) => {
+      const arm = new THREE.Mesh(
+        track(new THREE.SphereGeometry(0.044, 10, 10)),
+        bedTeddyMat,
+      );
+      arm.scale.set(0.75, 1.3, 0.78);
+      arm.position.set(ax, 0.135, 0.04);
+      arm.rotation.z = ax < 0 ? 0.38 : -0.38;
+      bedTeddyGroup.add(arm);
+    });
+    [-0.062, 0.062].forEach((lx) => {
+      const leg = new THREE.Mesh(
+        track(new THREE.SphereGeometry(0.046, 10, 10)),
+        bedTeddyMat,
+      );
+      leg.scale.set(0.85, 0.8, 1.25);
+      leg.position.set(lx, 0.04, 0.09);
+      bedTeddyGroup.add(leg);
+    });
+    const teddyBow = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.056, 0.011, 6, 16)),
+      bedTeddyRibbonMat,
+    );
+    teddyBow.rotation.x = Math.PI / 2;
+    teddyBow.position.set(0, 0.19, 0.015);
+    bedTeddyGroup.add(teddyBow);
 
     const bedMem = findLinkedMemoryForObject(
       'wooden_bed',
@@ -4580,36 +5270,68 @@ export function buildExhibitionRoom3DScene(params: {
       bedMem,
     );
 
-    // Walnut Bedroom Wardrobe with Opening Hinged Door along the South-West wall (facing North)
+    // Shaker-Paneled Walnut Bedroom Wardrobe with Opening Hinged Door along the South-West wall (facing North)
     const wardrobeGroup = interactiveObjectGroups.wardrobe;
     wardrobeGroup.position.set(-4.35, 0, 6.08);
     wardrobeGroup.rotation.y = Math.PI;
     spaceGroups.bedroom.add(wardrobeGroup);
 
-    const wardrobeBody = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.96, 1.92, 0.52)),
-      matWalnut,
+    const wardrobePlinth = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.02, 0.1, 0.56)),
+      bedWoodMat,
     );
-    wardrobeBody.position.set(0, 0.96, 0);
+    wardrobePlinth.position.set(0, 0.05, 0);
+    wardrobeGroup.add(wardrobePlinth);
+
+    const wardrobeBody = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.96, 1.84, 0.52)),
+      bedWoodMat,
+    );
+    wardrobeBody.position.set(0, 1.0, 0);
     wardrobeGroup.add(wardrobeBody);
     cameraObstacleMeshes.push(wardrobeBody);
 
+    const wardrobeCrown = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.06, 0.09, 0.58)),
+      bedWoodMat,
+    );
+    wardrobeCrown.position.set(0, 1.96, 0.01);
+    wardrobeGroup.add(wardrobeCrown);
+
     wardrobeDoorPivot = new THREE.Group();
-    wardrobeDoorPivot.position.set(-0.46, 0.96, 0.27);
+    wardrobeDoorPivot.position.set(-0.46, 0.99, 0.27);
     wardrobeGroup.add(wardrobeDoorPivot);
 
     const wardrobeDoorMesh = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.92, 1.82, 0.04)),
+      track(new THREE.BoxGeometry(0.92, 1.8, 0.04)),
       matWardrobeDoor,
     );
     wardrobeDoorMesh.position.set(0.46, 0, 0);
     wardrobeDoorPivot.add(wardrobeDoorMesh);
 
+    // Shaker recessed door molding panels + brass hinges
+    [0.44, -0.44].forEach((py) => {
+      const panelTrim = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.72, 0.66, 0.016)),
+        bedWoodMat,
+      );
+      panelTrim.position.set(0.46, py, 0.022);
+      wardrobeDoorPivot!.add(panelTrim);
+    });
+    [-0.64, 0.64].forEach((hy) => {
+      const hinge = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.01, 0.01, 0.065, 8)),
+        bedroomMats.matPolishedBrass,
+      );
+      hinge.position.set(0.01, hy, 0.02);
+      wardrobeDoorPivot!.add(hinge);
+    });
+
     const wardrobeHandle = new THREE.Mesh(
-      track(new THREE.SphereGeometry(0.032, 10, 10)),
-      matChampagneGold,
+      track(new THREE.SphereGeometry(0.032, 12, 10)),
+      bedroomMats.matPolishedBrass,
     );
-    wardrobeHandle.position.set(0.82, 0, 0.04);
+    wardrobeHandle.position.set(0.82, 0, 0.046);
     wardrobeDoorPivot.add(wardrobeHandle);
 
     const wardrobeMem = findLinkedMemoryForObject(
@@ -4633,36 +5355,91 @@ export function buildExhibitionRoom3DScene(params: {
     tvGroup.rotation.y = Math.PI;
     spaceGroups.bedroom.add(tvGroup);
 
+    // Console table with tapered legs & shelf flush on floorboards
+    [
+      [-0.36, -0.18],
+      [0.36, -0.18],
+      [-0.36, 0.18],
+      [0.36, 0.18],
+    ].forEach(([tx, tz]) => {
+      const tLeg = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.022, 0.016, 0.6, 8)),
+        bedWoodMat,
+      );
+      tLeg.position.set(tx, 0.3, tz);
+      tvGroup.add(tLeg);
+    });
     const tvStand = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.82, 0.62, 0.44)),
-      matWalnut,
+      track(new THREE.BoxGeometry(0.84, 0.24, 0.45)),
+      bedWoodMat,
     );
-    tvStand.position.set(0, 0.31, 0);
+    tvStand.position.set(0, 0.48, 0);
     tvGroup.add(tvStand);
     cameraObstacleMeshes.push(tvStand);
 
+    const tvLowerShelf = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.76, 0.03, 0.38)),
+      bedWoodMat,
+    );
+    tvLowerShelf.position.set(0, 0.16, 0);
+    tvGroup.add(tvLowerShelf);
+
     const tvCabinet = new THREE.Mesh(
       track(new THREE.BoxGeometry(0.74, 0.54, 0.38)),
-      track(new THREE.MeshStandardMaterial({ color: '#3B281B', roughness: 0.42 })),
+      track(
+        new THREE.MeshStandardMaterial({
+          map: bedroomMats.matBedWalnut.map,
+          color: '#5B3E2B',
+          roughness: 0.48,
+        }),
+      ),
     );
-    tvCabinet.position.set(0, 0.89, 0);
+    tvCabinet.position.set(0, 0.87, 0);
     tvGroup.add(tvCabinet);
     cameraObstacleMeshes.push(tvCabinet);
+
+    const tvBezel = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.64, 0.45, 0.026)),
+      bedroomMats.matDarkAnodizedMetal,
+    );
+    tvBezel.position.set(-0.02, 0.88, 0.186);
+    tvGroup.add(tvBezel);
 
     bedroomTvScreenMat = track(
       new THREE.MeshStandardMaterial({
         color: '#2B4C6F',
         emissive: new THREE.Color('#5CA8FF'),
         emissiveIntensity: 0.35,
-        roughness: 0.2,
+        roughness: 0.16,
+        metalness: 0.08,
       }),
     );
     const tvScreen = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(0.58, 0.4)),
+      track(new THREE.PlaneGeometry(0.56, 0.38)),
       bedroomTvScreenMat,
     );
-    tvScreen.position.set(0, 0.9, 0.195);
+    tvScreen.position.set(-0.02, 0.88, 0.201);
     tvGroup.add(tvScreen);
+
+    // Rotary tuning dials + classic V rabbit-ear brass antennas
+    [0.98, 0.86].forEach((dy) => {
+      const dial = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.02, 0.02, 0.022, 10)),
+        bedroomMats.matPolishedBrass,
+      );
+      dial.rotation.x = Math.PI / 2;
+      dial.position.set(0.325, dy, 0.195);
+      tvGroup.add(dial);
+    });
+    [-1, 1].forEach((side) => {
+      const ant = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.004, 0.005, 0.34, 6)),
+        bedroomMats.matAntiqueSilver,
+      );
+      ant.position.set(side * 0.11, 1.28, -0.02);
+      ant.rotation.z = side * -0.46;
+      tvGroup.add(ant);
+    });
 
     const tvMem = findLinkedMemoryForObject(
       'bedroom_tv',
@@ -4694,14 +5471,32 @@ export function buildExhibitionRoom3DScene(params: {
     deskGroup.rotation.y = Math.PI * 0.36;
     spaceGroups.study_corner.add(deskGroup);
 
+    // Warm Wood Study Table (#735137, roughness ~0.60) with beveled top, apron rails & brass-ferrule legs
     const deskTop = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.32, 0.07, 0.74)),
+      track(new THREE.BoxGeometry(1.34, 0.065, 0.76)),
       matStudyDeskTop,
     );
-    deskTop.position.set(0, 0.76, 0);
+    deskTop.position.set(0, 0.762, 0);
     deskGroup.add(deskTop);
     cameraObstacleMeshes.push(deskTop);
 
+    // Under-top structural wooden apron rails
+    const deskBackApron = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.18, 0.11, 0.035)),
+      bedroomMats.matDeskWood,
+    );
+    deskBackApron.position.set(0, 0.675, -0.31);
+    deskGroup.add(deskBackApron);
+    [-0.58, 0.58].forEach((sx) => {
+      const sideApron = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.035, 0.11, 0.62)),
+        bedroomMats.matDeskWood,
+      );
+      sideApron.position.set(sx, 0.675, 0);
+      deskGroup.add(sideApron);
+    });
+
+    // 4 Tapered Wooden Desk Legs planted flush at y = 0 with polished brass ferrules
     [
       [-0.58, -0.3],
       [0.58, -0.3],
@@ -4709,43 +5504,136 @@ export function buildExhibitionRoom3DScene(params: {
       [0.58, 0.3],
     ].forEach(([lx, lz]) => {
       const leg = new THREE.Mesh(
-        track(new THREE.CylinderGeometry(0.035, 0.028, 0.74, 10)),
-        matWalnut,
+        track(new THREE.CylinderGeometry(0.034, 0.023, 0.73, 12)),
+        bedroomMats.matDeskWood,
       );
-      leg.position.set(lx, 0.37, lz);
+      leg.position.set(lx, 0.365, lz);
       deskGroup.add(leg);
+
+      const ferrule = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.025, 0.023, 0.065, 12)),
+        bedroomMats.matPolishedBrass,
+      );
+      ferrule.position.set(lx, 0.038, lz);
+      deskGroup.add(ferrule);
     });
 
     deskDrawerMesh = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.58, 0.11, 0.62)),
-      track(new THREE.MeshStandardMaterial({ color: '#61432D', roughness: 0.5 })),
+      track(new THREE.BoxGeometry(0.58, 0.105, 0.62)),
+      bedroomMats.matDeskWood,
     );
-    deskDrawerMesh.position.set(0, 0.67, 0.04);
+    deskDrawerMesh.position.set(0, 0.675, 0.04);
     deskGroup.add(deskDrawerMesh);
 
-    // Desk lamp & certificate scroll on desk
+    // Brass cup drawer pull attached to deskDrawerMesh so it slides cleanly with the drawer
+    const drawerPull = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.028, 0.007, 8, 12, Math.PI)),
+      bedroomMats.matPolishedBrass,
+    );
+    drawerPull.rotation.x = Math.PI;
+    drawerPull.position.set(0, -0.005, 0.318);
+    deskDrawerMesh.add(drawerPull);
+
+    // Subtle school desk details: stacked notebook & ceramic cup with colored pencils
+    const notebookStack = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.18, 0.022, 0.24)),
+      track(new THREE.MeshStandardMaterial({ color: '#3E5B74', roughness: 0.78 })),
+    );
+    notebookStack.position.set(-0.48, 0.806, 0.04);
+    notebookStack.rotation.y = 0.14;
+    deskGroup.add(notebookStack);
+
+    const pencilCup = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.034, 0.03, 0.088, 14)),
+      bedroomMats.matCreamTrim,
+    );
+    pencilCup.position.set(-0.54, 0.838, -0.24);
+    deskGroup.add(pencilCup);
+    ['#C84B3B', '#E2A83B', '#3E7A56'].forEach((pHex, pIdx) => {
+      const pencil = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.0045, 0.0045, 0.135, 6)),
+        track(new THREE.MeshStandardMaterial({ color: pHex, roughness: 0.6 })),
+      );
+      pencil.position.set(
+        -0.54 + (pIdx - 1) * 0.013,
+        0.885,
+        -0.24 + (pIdx % 2 === 0 ? 0.008 : -0.008),
+      );
+      pencil.rotation.z = (pIdx - 1) * 0.16;
+      deskGroup.add(pencil);
+    });
+
+    // Articulated Brass & Emerald Banker's Study Lamp + Warm Study Lamp Glow (#FFD28E)
     studyDeskLampGroup = new THREE.Group();
     deskGroup.add(studyDeskLampGroup);
+
     const lampBase = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.09, 0.11, 0.04, 14)),
-      matChampagneGold,
+      track(new THREE.CylinderGeometry(0.082, 0.105, 0.032, 18)),
+      bedroomMats.matPolishedBrass,
     );
-    lampBase.position.set(-0.42, 0.81, -0.16);
+    lampBase.position.set(-0.44, 0.811, -0.17);
     studyDeskLampGroup.add(lampBase);
 
+    const lampLowerArm = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.012, 0.015, 0.24, 10)),
+      bedroomMats.matPolishedBrass,
+    );
+    lampLowerArm.position.set(-0.44, 0.93, -0.18);
+    lampLowerArm.rotation.z = -0.12;
+    studyDeskLampGroup.add(lampLowerArm);
+
+    const lampJoint = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.02, 10, 10)),
+      bedroomMats.matPolishedBrass,
+    );
+    lampJoint.position.set(-0.425, 1.05, -0.18);
+    studyDeskLampGroup.add(lampJoint);
+
+    const lampUpperArm = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.01, 0.012, 0.16, 10)),
+      bedroomMats.matPolishedBrass,
+    );
+    lampUpperArm.position.set(-0.37, 1.11, -0.14);
+    lampUpperArm.rotation.z = -0.78;
+    lampUpperArm.rotation.x = 0.4;
+    studyDeskLampGroup.add(lampUpperArm);
+
     const lampShade = new THREE.Mesh(
-      track(new THREE.ConeGeometry(0.14, 0.16, 16)),
+      track(new THREE.ConeGeometry(0.145, 0.14, 20, 1, true)),
       track(
         new THREE.MeshStandardMaterial({
-          color: '#2F5D46',
-          emissive: new THREE.Color('#FFE09E'),
-          emissiveIntensity: 0.45,
-          roughness: 0.35,
+          color: '#25523D',
+          emissive: new THREE.Color('#FFD28E'),
+          emissiveIntensity: 0.38,
+          roughness: 0.26,
+          metalness: 0.18,
+          side: THREE.DoubleSide,
         }),
       ),
     );
-    lampShade.position.set(-0.36, 1.08, -0.12);
+    lampShade.position.set(-0.32, 1.11, -0.1);
+    lampShade.rotation.z = -0.22;
     studyDeskLampGroup.add(lampShade);
+
+    const lampBulb = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.032, 12, 10)),
+      track(
+        new THREE.MeshStandardMaterial({
+          color: '#FFF9E8',
+          emissive: new THREE.Color('#FFD28E'),
+          emissiveIntensity: 2.2,
+          roughness: 0.2,
+        }),
+      ),
+    );
+    lampBulb.position.set(-0.32, 1.06, -0.1);
+    studyDeskLampGroup.add(lampBulb);
+
+    // Warm Study Lamp Glow (#FFD28E) illuminating desk wood, retro PC & open notebooks
+    const studyLampGlow = new THREE.PointLight('#FFD28E', 1.45, 4.2, 1.6);
+    studyLampGlow.position.set(-0.3, 1.02, -0.08);
+    studyLampGlow.castShadow = false;
+    studyDeskLampGroup.add(studyLampGlow);
 
     const deskMem = findLinkedMemoryForObject(
       'study_desk',
@@ -4762,28 +5650,39 @@ export function buildExhibitionRoom3DScene(params: {
       deskMem,
     );
 
-    // Interactive Spinning World Globe on Study Desk
+    // Interactive Vintage Spinning World Globe seated flush on rear-right corner of Study Desk (y = 0.7945)
     const globeGroup = interactiveObjectGroups.spinning_globe;
-    globeGroup.position.set(-4.95, 0.8, -4.45);
+    globeGroup.position.set(-5.23, 0.7945, -5.18);
     spaceGroups.study_corner.add(globeGroup);
 
     const globeBase = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.1, 0.13, 0.05)),
-      matChampagneGold,
+      track(new THREE.CylinderGeometry(0.085, 0.115, 0.042, 18)),
+      bedroomMats.matBedWalnut,
     );
+    globeBase.position.y = 0.021;
     globeGroup.add(globeBase);
 
-    globeSphereMesh = new THREE.Mesh(
-      track(new THREE.SphereGeometry(0.17, 22, 22)),
-      track(
-        new THREE.MeshStandardMaterial({
-          color: '#4F86A6',
-          roughness: 0.38,
-          metalness: 0.12,
-        }),
-      ),
+    const globeStem = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.015, 0.022, 0.06, 12)),
+      bedroomMats.matPolishedBrass,
     );
-    globeSphereMesh.position.set(0, 0.22, 0);
+    globeStem.position.y = 0.062;
+    globeGroup.add(globeStem);
+
+    const globeMeridian = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.188, 0.01, 10, 28, Math.PI * 1.15)),
+      bedroomMats.matPolishedBrass,
+    );
+    globeMeridian.position.set(0, 0.24, 0);
+    globeMeridian.rotation.z = -Math.PI * 0.56;
+    globeGroup.add(globeMeridian);
+
+    globeSphereMesh = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.165, 24, 20)),
+      bedroomMats.matVintageGlobe,
+    );
+    globeSphereMesh.position.set(0, 0.24, 0);
+    globeSphereMesh.rotation.z = 0.41; // Realistic 23.5° axial tilt
     globeGroup.add(globeSphereMesh);
 
     const globeMem = findLinkedMemoryForObject(
@@ -4800,11 +5699,225 @@ export function buildExhibitionRoom3DScene(params: {
       [0, 0.22, 0],
       globeMem,
     );
+
+    // Composite 3D Walnut Childhood Bookshelf along West Wall (x = -6.56, z = -1.15)
+    const shelfGroup = interactiveObjectGroups.bookshelf;
+    shelfGroup.position.set(-6.56, 0, -1.15);
+    shelfGroup.rotation.y = Math.PI / 2;
+    spaceGroups.study_corner.add(shelfGroup);
+
+    const shelfBack = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.66, 2.18, 0.05)),
+      track(
+        new THREE.MeshStandardMaterial({
+          map: bedroomMats.matBedWalnut.map,
+          color: '#573A26',
+          roughness: 0.72,
+        }),
+      ),
+    );
+    shelfBack.position.set(0, 1.09, -0.18);
+    shelfGroup.add(shelfBack);
+
+    [-0.81, 0.81].forEach((sx) => {
+      const sidePanel = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.06, 2.18, 0.42)),
+        bedroomMats.matBedWalnut,
+      );
+      sidePanel.position.set(sx, 1.09, 0);
+      shelfGroup.add(sidePanel);
+    });
+
+    const crownTop = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.76, 0.095, 0.48)),
+      bedroomMats.matBedWalnut,
+    );
+    crownTop.position.set(0, 2.21, 0.01);
+    shelfGroup.add(crownTop);
+
+    [0.08, 0.58, 1.08, 1.58, 2.08].forEach((sy) => {
+      const plank = new THREE.Mesh(
+        track(new THREE.BoxGeometry(1.58, 0.045, 0.39)),
+        bedroomMats.matBedWalnut,
+      );
+      plank.position.set(0, sy, 0.01);
+      shelfGroup.add(plank);
+
+      const brassLip = new THREE.Mesh(
+        track(new THREE.BoxGeometry(1.58, 0.014, 0.015)),
+        bedroomMats.matPolishedBrass,
+      );
+      brassLip.position.set(0, sy, 0.21);
+      shelfGroup.add(brassLip);
+    });
+
+    // Varied Childhood Book Spines across 3 shelves (linen/leather colors, gold bands, leaning books & brass bookends)
+    const bookColors = [
+      '#8E3529',
+      '#2B5842',
+      '#355573',
+      '#B47D3B',
+      '#674366',
+      '#9B5833',
+      '#4A6B62',
+      '#7B3A42',
+    ];
+    const bookMats = bookColors.map((hex) =>
+      track(
+        new THREE.MeshStandardMaterial({
+          color: hex,
+          bumpMap: bedroomMats.matAgedLeather.bumpMap,
+          bumpScale: 0.006,
+          roughness: 0.68,
+        }),
+      ),
+    );
+    [0.103, 0.603, 1.103].forEach((shelfTopY, rowIdx) => {
+      let cursorX = -0.68 + rowIdx * 0.06;
+      const count = rowIdx === 0 ? 9 : 8;
+      for (let bi = 0; bi < count; bi++) {
+        const bw = 0.044 + ((bi * 3 + rowIdx) % 4) * 0.011;
+        const bh = 0.23 + ((bi * 2 + rowIdx) % 4) * 0.042;
+        const bd = 0.21 + ((bi + rowIdx) % 2) * 0.04;
+        const isLeaning = bi === count - 1;
+        const bookGroup = new THREE.Group();
+        bookGroup.position.set(
+          cursorX + bw * 0.5 + (isLeaning ? 0.045 : 0),
+          shelfTopY + bh * 0.5 - (isLeaning ? 0.012 : 0),
+          0.02,
+        );
+        if (isLeaning) bookGroup.rotation.z = -0.26;
+
+        const bookCover = new THREE.Mesh(
+          track(new THREE.BoxGeometry(bw, bh, bd)),
+          bookMats[(bi + rowIdx * 3) % bookMats.length],
+        );
+        bookGroup.add(bookCover);
+
+        // Cream page block subtly recessed from cover
+        const pages = new THREE.Mesh(
+          track(new THREE.BoxGeometry(bw * 0.78, bh * 0.94, bd * 0.92)),
+          bedroomMats.matAgedPaper,
+        );
+        pages.position.z = -0.008;
+        bookGroup.add(pages);
+
+        // Gold-foil spine band
+        if (bi % 2 === 0) {
+          const band = new THREE.Mesh(
+            track(new THREE.BoxGeometry(bw + 0.002, 0.016, 0.008)),
+            bedroomMats.matPolishedBrass,
+          );
+          band.position.set(0, bh * 0.24, bd * 0.5);
+          bookGroup.add(band);
+        }
+        shelfGroup.add(bookGroup);
+        cursorX += bw + 0.012;
+      }
+
+      // Brass L-bookend keeping the books grounded
+      const bookend = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.018, 0.14, 0.14)),
+        bedroomMats.matPolishedBrass,
+      );
+      bookend.position.set(cursorX + 0.08, shelfTopY + 0.07, 0.02);
+      shelfGroup.add(bookend);
+    });
+
+    // 4th Bookshelf Tier (y = 1.603): Horizontal vintage book stack, carved wooden biplane & keepsake box
+    {
+      const topShelfY = 1.603;
+      const stackSpecs: Array<[number, number, number, number, number]> = [
+        [-0.44, topShelfY + 0.022, 0.02, 0.34, 0.044],
+        [-0.42, topShelfY + 0.062, 0.01, 0.3, 0.036],
+        [-0.43, topShelfY + 0.096, 0.02, 0.25, 0.032],
+      ];
+      stackSpecs.forEach(([sx, sy, sz, sw, sh], idx) => {
+        const flatBook = new THREE.Mesh(
+          track(new THREE.BoxGeometry(sw, sh, 0.22)),
+          bookMats[(idx + 2) % bookMats.length],
+        );
+        flatBook.position.set(sx, sy, sz);
+        flatBook.rotation.y = (idx - 1) * 0.08;
+        shelfGroup.add(flatBook);
+      });
+
+      // Miniature Carved Wooden Toy Biplane resting flush on top shelf
+      const biplaneGroup = new THREE.Group();
+      biplaneGroup.position.set(0.08, topShelfY + 0.056, 0.03);
+      biplaneGroup.rotation.y = -0.32;
+      const fuselage = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.024, 0.016, 0.26, 10)),
+        bedroomMats.matWillowBat,
+      );
+      fuselage.rotation.z = Math.PI / 2;
+      biplaneGroup.add(fuselage);
+      [0.042, -0.018].forEach((wy) => {
+        const wing = new THREE.Mesh(
+          track(new THREE.BoxGeometry(0.068, 0.012, 0.28)),
+          bookMats[0],
+        );
+        wing.position.set(0.03, wy, 0);
+        biplaneGroup.add(wing);
+      });
+      const tailFin = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.045, 0.055, 0.01)),
+        bookMats[0],
+      );
+      tailFin.position.set(-0.11, 0.03, 0);
+      biplaneGroup.add(tailFin);
+      const propHub = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.008, 0.09, 0.014)),
+        bedroomMats.matPolishedBrass,
+      );
+      propHub.position.set(0.135, 0, 0);
+      biplaneGroup.add(propHub);
+      [-0.04, 0.04].forEach((wz) => {
+        const planeWheel = new THREE.Mesh(
+          track(new THREE.CylinderGeometry(0.02, 0.02, 0.01, 10)),
+          bedroomMats.matDarkAnodizedMetal,
+        );
+        planeWheel.rotation.x = Math.PI / 2;
+        planeWheel.position.set(0.05, -0.036, wz);
+        biplaneGroup.add(planeWheel);
+      });
+      shelfGroup.add(biplaneGroup);
+
+      // Brass-clasped wooden keepsake box on right end of 4th shelf
+      const keepBox = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.24, 0.11, 0.18)),
+        bedroomMats.matDeskWood,
+      );
+      keepBox.position.set(0.5, topShelfY + 0.055, 0.02);
+      keepBox.rotation.y = -0.14;
+      shelfGroup.add(keepBox);
+      const keepClasp = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.036, 0.032, 0.01)),
+        bedroomMats.matPolishedBrass,
+      );
+      keepClasp.position.set(0.5, topShelfY + 0.065, 0.112);
+      shelfGroup.add(keepClasp);
+    }
+
+    const bookshelfMem = findLinkedMemoryForObject(
+      'bookshelf',
+      /book|bookshelf|school|read|notebook|library|comic|study/,
+    );
+    registerInteractiveHitbox(
+      shelfGroup,
+      'bookshelf',
+      'study_corner',
+      'Childhood Bookshelf',
+      'Click or press [E] to inspect books & school memories on the shelf',
+      [1.72, 2.24, 0.56],
+      [0, 1.12, 0.04],
+      bookshelfMem,
+    );
   }
 
   // -------------------------------------------------------------------------
   // SPACE C: CHILDHOOD PLAY AREA (Organized around perimeter & central track)
-  // Hinged Toy Chest, Chugging Toy Train, Chalk Hopscotch Court & Cricket Set
+  // Hinged Toy Chest, Classic Toys, Chugging Toy Train, Chalk Hopscotch & Cricket Set
   // -------------------------------------------------------------------------
   let toyChestLidPivot: THREE.Group | null = null;
   let toyTrainCarriageGroup: THREE.Group | null = null;
@@ -4812,29 +5925,133 @@ export function buildExhibitionRoom3DScene(params: {
   let cricketBatPivot: THREE.Group | null = null;
   let cricketBallMesh: THREE.Mesh | null = null;
   {
-    // 1. Hinged Wooden Toy Storage Chest in SW Play Alcove
+    // 1. Hinged Wooden Toy Storage Chest + Classic Wooden Blocks in SW Play Alcove
     const chestGroup = interactiveObjectGroups.toy_chest;
     chestGroup.position.set(-3.55, 0, 2.35);
     chestGroup.rotation.y = 0.42;
     spaceGroups.play_area.add(chestGroup);
 
+    // 4 short oak chest feet flush on oak floorboards
+    [
+      [-0.39, -0.22],
+      [0.39, -0.22],
+      [-0.39, 0.22],
+      [0.39, 0.22],
+    ].forEach(([cx, cz]) => {
+      const foot = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.07, 0.045, 0.07)),
+        bedroomMats.matBedWalnut,
+      );
+      foot.position.set(cx, 0.0225, cz);
+      chestGroup.add(foot);
+    });
+
     const chestBox = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.86, 0.44, 0.52)),
-      matWalnut,
+      track(new THREE.BoxGeometry(0.86, 0.41, 0.52)),
+      bedroomMats.matBedWalnut,
     );
-    chestBox.position.set(0, 0.22, 0);
+    chestBox.position.set(0, 0.245, 0);
     chestGroup.add(chestBox);
 
+    // Brass chest clasp & corner straps
+    const chestClasp = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.08, 0.075, 0.025)),
+      bedroomMats.matPolishedBrass,
+    );
+    chestClasp.position.set(0, 0.39, 0.266);
+    chestGroup.add(chestClasp);
+
+    [-0.415, 0.415].forEach((bx) => {
+      const strap = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.04, 0.42, 0.535)),
+        bedroomMats.matPolishedBrass,
+      );
+      strap.position.set(bx, 0.245, 0);
+      chestGroup.add(strap);
+    });
+
     toyChestLidPivot = new THREE.Group();
-    toyChestLidPivot.position.set(0, 0.44, -0.25);
+    toyChestLidPivot.position.set(0, 0.45, -0.25);
     chestGroup.add(toyChestLidPivot);
 
     const chestLid = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.88, 0.08, 0.54)),
-      track(new THREE.MeshStandardMaterial({ color: '#7A5234', roughness: 0.48 })),
+      track(new THREE.BoxGeometry(0.9, 0.08, 0.56)),
+      bedroomMats.matDeskWood,
     );
     chestLid.position.set(0, 0.04, 0.25);
     toyChestLidPivot.add(chestLid);
+
+    // Classic painted wooden alphabet/stacking blocks, spinning top & toy car resting flush on playRug (y = 0.030)
+    const blockSpecs: Array<[number, number, number, string, number]> = [
+      [0.54, 0.07, 0.16, '#C84B3B', 0.25],
+      [0.64, 0.07, 0.14, '#3D6E8E', -0.18],
+      [0.59, 0.15, 0.15, '#D9A043', 0.45],
+    ];
+    blockSpecs.forEach(([bx, by, bz, colorHex, ry]) => {
+      const blk = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.08, 0.08, 0.08)),
+        track(new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.68 })),
+      );
+      blk.position.set(bx, by, bz);
+      blk.rotation.y = ry;
+      chestGroup.add(blk);
+    });
+
+    // Classic Wooden Spinning Top leaning naturally beside blocks
+    const spinTopGroup = new THREE.Group();
+    spinTopGroup.position.set(0.46, 0.058, 0.3);
+    spinTopGroup.rotation.z = 0.28;
+    const topCone = new THREE.Mesh(
+      track(new THREE.ConeGeometry(0.042, 0.062, 16)),
+      track(new THREE.MeshStandardMaterial({ color: '#B54736', roughness: 0.5 })),
+    );
+    topCone.rotation.x = Math.PI;
+    spinTopGroup.add(topCone);
+    const topBand = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.043, 0.043, 0.012, 16)),
+      bedroomMats.matCreamTrim,
+    );
+    topBand.position.y = 0.024;
+    spinTopGroup.add(topBand);
+    const topStem = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.008, 0.009, 0.038, 10)),
+      bedroomMats.matWillowBat,
+    );
+    topStem.position.y = 0.046;
+    spinTopGroup.add(topStem);
+    chestGroup.add(spinTopGroup);
+
+    // Classic Hand-Painted Wooden Toy Car seated flush beside chest
+    const toyCarGroup = new THREE.Group();
+    toyCarGroup.position.set(0.66, 0.03, 0.34);
+    toyCarGroup.rotation.y = -0.58;
+    const carBody = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.18, 0.055, 0.095)),
+      track(new THREE.MeshStandardMaterial({ color: '#396987', roughness: 0.52 })),
+    );
+    carBody.position.y = 0.048;
+    toyCarGroup.add(carBody);
+    const carCabin = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.095, 0.048, 0.086)),
+      bedroomMats.matCreamTrim,
+    );
+    carCabin.position.set(-0.01, 0.094, 0);
+    toyCarGroup.add(carCabin);
+    [
+      [-0.055, 0.05],
+      [0.055, 0.05],
+      [-0.055, -0.05],
+      [0.055, -0.05],
+    ].forEach(([wx, wz]) => {
+      const carWheel = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.024, 0.024, 0.016, 12)),
+        bedroomMats.matBedWalnut,
+      );
+      carWheel.rotation.x = Math.PI / 2;
+      carWheel.position.set(wx, 0.024, wz);
+      toyCarGroup.add(carWheel);
+    });
+    chestGroup.add(toyCarGroup);
 
     const chestMem = findLinkedMemoryForObject(
       'toy_chest',
@@ -4851,36 +6068,100 @@ export function buildExhibitionRoom3DScene(params: {
       chestMem,
     );
 
-    // 2. Express Toy Train on Circular Brass Track around Central Tree Plinth (centered at (0, 0, -1.1))
+    // 2. Classic Wooden & Brass Express Toy Train on Circular Track around Central Tree Plinth (0, 0, -1.1)
     const trainRoot = interactiveObjectGroups.toy_train;
     trainRoot.position.set(0, 0, -1.1);
     spaceGroups.play_area.add(trainRoot);
 
-    const trackRing = new THREE.Mesh(
-      track(new THREE.TorusGeometry(1.62, 0.014, 10, 56)),
-      matChampagneGold,
-    );
-    trackRing.rotation.x = Math.PI / 2;
-    trackRing.position.y = 0.02;
-    trainRoot.add(trackRing);
+    [1.56, 1.68].forEach((r) => {
+      const railRing = new THREE.Mesh(
+        track(new THREE.TorusGeometry(r, 0.011, 8, 64)),
+        bedroomMats.matPolishedBrass,
+      );
+      railRing.rotation.x = Math.PI / 2;
+      railRing.position.y = 0.018;
+      trainRoot.add(railRing);
+    });
+    // Wooden railway sleepers around track
+    for (let ti = 0; ti < 32; ti++) {
+      const ang = (ti / 32) * Math.PI * 2;
+      const sleeper = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.18, 0.012, 0.032)),
+        bedroomMats.matBedWalnut,
+      );
+      sleeper.position.set(Math.cos(ang) * 1.62, 0.008, Math.sin(ang) * 1.62);
+      sleeper.rotation.y = -ang;
+      trainRoot.add(sleeper);
+    }
 
     toyTrainCarriageGroup = new THREE.Group();
-    toyTrainCarriageGroup.position.set(1.62, 0.08, 0);
+    toyTrainCarriageGroup.position.set(1.62, 0.025, 0);
     trainRoot.add(toyTrainCarriageGroup);
 
-    const locoEngine = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.32, 0.16, 0.16)),
-      track(new THREE.MeshStandardMaterial({ color: '#922B21', roughness: 0.4 })),
+    const trainRedMat = track(
+      new THREE.MeshStandardMaterial({ color: '#9C2D23', roughness: 0.42, metalness: 0.08 }),
     );
-    locoEngine.position.set(0, 0.08, 0);
-    toyTrainCarriageGroup.add(locoEngine);
+    const trainGreenMat = track(
+      new THREE.MeshStandardMaterial({ color: '#2B5B44', roughness: 0.46, metalness: 0.06 }),
+    );
+    const trainChassis = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.36, 0.04, 0.16)),
+      bedroomMats.matDarkAnodizedMetal,
+    );
+    trainChassis.position.set(0, 0.048, 0);
+    toyTrainCarriageGroup.add(trainChassis);
+
+    const locoBoiler = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.068, 0.068, 0.22, 16)),
+      trainRedMat,
+    );
+    locoBoiler.rotation.z = Math.PI / 2;
+    locoBoiler.position.set(0.05, 0.12, 0);
+    toyTrainCarriageGroup.add(locoBoiler);
+
+    const locoCab = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.13, 0.16, 0.15)),
+      trainGreenMat,
+    );
+    locoCab.position.set(-0.1, 0.145, 0);
+    toyTrainCarriageGroup.add(locoCab);
+
+    const locoRoof = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.15, 0.02, 0.17)),
+      bedroomMats.matDarkAnodizedMetal,
+    );
+    locoRoof.position.set(-0.1, 0.232, 0);
+    toyTrainCarriageGroup.add(locoRoof);
 
     const locoChimney = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.035, 0.03, 0.12, 12)),
-      matChampagneGold,
+      track(new THREE.CylinderGeometry(0.028, 0.02, 0.11, 12)),
+      bedroomMats.matPolishedBrass,
     );
-    locoChimney.position.set(0.09, 0.2, 0);
+    locoChimney.position.set(0.12, 0.21, 0);
     toyTrainCarriageGroup.add(locoChimney);
+
+    const locoDome = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.032, 12, 10)),
+      bedroomMats.matPolishedBrass,
+    );
+    locoDome.position.set(0.03, 0.19, 0);
+    toyTrainCarriageGroup.add(locoDome);
+
+    // 4 Spoked Brass Wheels sitting flush on rail top
+    [
+      [-0.1, 0.085],
+      [0.09, 0.085],
+      [-0.1, -0.085],
+      [0.09, -0.085],
+    ].forEach(([wx, wz]) => {
+      const wheel = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.04, 0.04, 0.018, 14)),
+        bedroomMats.matPolishedBrass,
+      );
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(wx, 0.04, wz);
+      toyTrainCarriageGroup!.add(wheel);
+    });
 
     const trainMem = findLinkedMemoryForObject(
       'toy_train',
@@ -4930,7 +6211,7 @@ export function buildExhibitionRoom3DScene(params: {
 
     hopscotchPuckMesh = new THREE.Mesh(
       track(new THREE.CylinderGeometry(0.065, 0.065, 0.03, 16)),
-      matChampagneGold,
+      bedroomMats.matPolishedBrass,
     );
     hopscotchPuckMesh.position.set(0, 0.025, 0);
     hopscotchGroup.add(hopscotchPuckMesh);
@@ -4950,46 +6231,108 @@ export function buildExhibitionRoom3DScene(params: {
       hopMem,
     );
 
-    // 4. Backyard/Play Area Cricket Bat, Ball & Wickets Set in SE Play Court
+    // 4. Realistic English-Willow Cricket Bat, Stitched Leather Ball & Ash Wickets Set in SE Play Court
     const cricketGroup = interactiveObjectGroups.cricket_set;
     cricketGroup.position.set(3.85, 0, 2.75);
     cricketGroup.rotation.y = -0.35;
     spaceGroups.play_area.add(cricketGroup);
 
-    // 3 Wooden Stumps + Bail
-    [-0.08, 0, 0.08].forEach((wx) => {
+    // 3 Turned Ash Stumps planted flush at y = 0 + 2 Carved Wooden Bails on top
+    [-0.082, 0, 0.082].forEach((wx) => {
       const stump = new THREE.Mesh(
-        track(new THREE.CylinderGeometry(0.016, 0.016, 0.58)),
-        track(new THREE.MeshStandardMaterial({ color: '#DFC18D', roughness: 0.52 })),
+        track(new THREE.CylinderGeometry(0.015, 0.016, 0.62, 12)),
+        bedroomMats.matAshStump,
       );
-      stump.position.set(wx, 0.29, 0);
+      stump.position.set(wx, 0.31, 0);
       cricketGroup.add(stump);
+
+      const stumpCrown = new THREE.Mesh(
+        track(new THREE.SphereGeometry(0.0155, 10, 8)),
+        bedroomMats.matAshStump,
+      );
+      stumpCrown.position.set(wx, 0.62, 0);
+      cricketGroup.add(stumpCrown);
+    });
+    [-0.041, 0.041].forEach((bx) => {
+      const bail = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(0.0085, 0.0085, 0.078, 8)),
+        bedroomMats.matAshStump,
+      );
+      bail.rotation.z = Math.PI / 2;
+      bail.position.set(bx, 0.638, 0);
+      cricketGroup.add(bail);
     });
 
+    // Sculpted English-Willow Cricket Bat leaning naturally against the right ash stump (toe guard flush on floor)
     cricketBatPivot = new THREE.Group();
-    cricketBatPivot.position.set(0.26, 0.42, 0.12);
-    cricketBatPivot.rotation.z = -0.28;
+    cricketBatPivot.position.set(0.21, 0.418, 0.07);
+    cricketBatPivot.rotation.set(-0.04, 0, 0.25);
     cricketGroup.add(cricketBatPivot);
 
     const batBlade = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.09, 0.48, 0.035)),
-      track(new THREE.MeshStandardMaterial({ color: '#D6AF74', roughness: 0.55 })),
+      track(new THREE.BoxGeometry(0.102, 0.5, 0.028)),
+      bedroomMats.matWillowBat,
     );
-    batBlade.position.set(0, -0.16, 0);
+    batBlade.position.set(0, -0.17, 0);
     cricketBatPivot.add(batBlade);
 
-    const batHandle = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.018, 0.018, 0.26, 10)),
-      track(new THREE.MeshStandardMaterial({ color: '#FAF3E6', roughness: 0.7 })),
+    // Classic peaked dorsal spine ridge along the back of the willow blade
+    const batSpine = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.012, 0.026, 0.44, 4)),
+      bedroomMats.matWillowBat,
     );
-    batHandle.position.set(0, 0.18, 0);
+    batSpine.rotation.y = Math.PI / 4;
+    batSpine.position.set(0, -0.19, -0.014);
+    cricketBatPivot.add(batSpine);
+
+    // Protective dark rubber toe guard at bottom of blade
+    const batToeGuard = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.104, 0.02, 0.032)),
+      bedroomMats.matDarkAnodizedMetal,
+    );
+    batToeGuard.position.set(0, -0.425, 0);
+    cricketBatPivot.add(batToeGuard);
+
+    // Tapered willow shoulder splice + ribbed rubber-wrapped cane handle
+    const batShoulder = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.017, 0.042, 0.075, 10)),
+      bedroomMats.matWillowBat,
+    );
+    batShoulder.position.set(0, 0.095, 0);
+    cricketBatPivot.add(batShoulder);
+
+    const batHandle = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.0165, 0.018, 0.25, 12)),
+      bedroomMats.matBatGrip,
+    );
+    batHandle.position.set(0, 0.24, 0);
     cricketBatPivot.add(batHandle);
 
+    // Tactile ribbed chevron grip rings along rubber handle
+    for (let gi = 0; gi < 6; gi++) {
+      const gripRing = new THREE.Mesh(
+        track(new THREE.TorusGeometry(0.0182, 0.0024, 6, 12)),
+        bedroomMats.matDarkAnodizedMetal,
+      );
+      gripRing.rotation.x = Math.PI / 2;
+      gripRing.position.set(0, 0.145 + gi * 0.038, 0);
+      cricketBatPivot.add(gripRing);
+    }
+
+    // Stitched Crimson Leather Cricket Ball resting flush on ground (radius 0.042 -> y = 0.042)
     cricketBallMesh = new THREE.Mesh(
-      track(new THREE.SphereGeometry(0.045, 14, 14)),
-      track(new THREE.MeshStandardMaterial({ color: '#B32821', roughness: 0.35 })),
+      track(new THREE.SphereGeometry(0.042, 20, 16)),
+      bedroomMats.matCricketBall,
     );
-    cricketBallMesh.position.set(0.14, 0.045, 0.24);
+    cricketBallMesh.position.set(0.14, 0.042, 0.24);
+    cricketBallMesh.rotation.set(0.35, 0.7, 0.2);
+    // Subtle raised cream linen seam ring encircling the leather ball
+    const ballSeamRing = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.0422, 0.0018, 6, 24)),
+      bedroomMats.matCottonSheet,
+    );
+    ballSeamRing.rotation.x = Math.PI / 2;
+    cricketBallMesh.add(ballSeamRing);
     cricketGroup.add(cricketBallMesh);
 
     const cricketMem = findLinkedMemoryForObject(
@@ -5008,7 +6351,7 @@ export function buildExhibitionRoom3DScene(params: {
     );
   }
 
-  // Additive Interactive Childhood Bedroom System (zero changes to existing visuals)
+  // Additive Interactive Childhood Bedroom System (enhanced with unified PBR bedroom materials)
   const bedroomInteractions: ChildhoodBedroomInteractionController =
     attachChildhoodBedroomInteractions({
       rootGroup,
@@ -5021,13 +6364,44 @@ export function buildExhibitionRoom3DScene(params: {
       cricketGroup: interactiveObjectGroups.cricket_set,
       memories: rawMemories,
       qualityConfig,
-      matWalnut,
-      matChampagneGold,
-      matBoucleFabric,
+      matWalnut: bedroomMats.matBedWalnut,
+      matChampagneGold: bedroomMats.matPolishedBrass,
+      matBoucleFabric: bedroomMats.matCottonSheet,
+      bedroomMats,
       registerInteractiveHitbox,
       track,
       cameraObstacleMeshes,
     });
+
+  // Unified shadow pass across Childhood Bedroom, Study Corner, Play Area & decorative groups
+  // (Skips invisible interaction hitboxes, additive cones, flat rugs & MeshBasicMaterial overlays)
+  [
+    spaceGroups.bedroom,
+    spaceGroups.study_corner,
+    spaceGroups.play_area,
+    bedroomCushionsGroup,
+    bedroomLampsGroup,
+    bedroomPostersGroup,
+  ].forEach((grp) => {
+    grp.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+        if (
+          !mat ||
+          mat.visible === false ||
+          (mat as THREE.MeshBasicMaterial).isMeshBasicMaterial ||
+          mat.blending === THREE.AdditiveBlending
+        ) {
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+          return;
+        }
+        mesh.castShadow = allowBedroomShadows;
+        mesh.receiveShadow = true;
+      }
+    });
+  });
 
   // -------------------------------------------------------------------------
   // SPACE D & E: BACKYARD GARDEN & ELEVATED WOODEN TREEHOUSE (NE Garden Corner: x = 4.75, z = -2.15)
@@ -5293,15 +6667,15 @@ export function buildExhibitionRoom3DScene(params: {
     const targets = computeRoomLightingRigTargets(presetId, atriumMood);
     roomHemiLight.color.set(targets.hemiSkyHex);
     roomHemiLight.groundColor.set(targets.hemiGroundHex);
-    roomHemiLight.intensity = targets.hemiIntensity;
+    roomHemiLight.intensity = targets.hemiIntensity * galleryHemiScale;
     centerCeilingLight.color.set(targets.centerColorHex);
     centerCeilingLight.intensity =
-      studioLightIntensityOverride ?? targets.centerIntensity;
+      (studioLightIntensityOverride ?? targets.centerIntensity) * galleryLightScale;
     northWallWasher.color.set(targets.northColorHex);
-    northWallWasher.intensity = targets.northIntensity;
-    westWallWasher.intensity = targets.sideWashIntensity;
-    eastWallWasher.intensity = targets.sideWashIntensity;
-    southEntryLight.intensity = targets.southEntryIntensity;
+    northWallWasher.intensity = targets.northIntensity * galleryLightScale;
+    westWallWasher.intensity = targets.sideWashIntensity * galleryLightScale;
+    eastWallWasher.intensity = targets.sideWashIntensity * galleryLightScale;
+    southEntryLight.intensity = targets.southEntryIntensity * galleryLightScale;
   };
 
   const getAtmospherePreset = (): AtmospherePresetId => activeAtmospherePreset;
@@ -5535,6 +6909,16 @@ export function buildExhibitionRoom3DScene(params: {
         linkedMemory = findLinkedMemoryForObject(
           'treehouse_ladder',
           /treehouse|ladder|tree/,
+        );
+        break;
+      case 'bookshelf':
+        title = 'Childhood Bookshelf';
+        spaceId = 'study_corner';
+        actionMessage =
+          'Inspected the walnut Childhood Bookshelf for saved books & school memories.';
+        linkedMemory = findLinkedMemoryForObject(
+          'bookshelf',
+          /book|bookshelf|school|read|notebook|library|comic/,
         );
         break;
       case 'study_desk':
@@ -5818,19 +7202,19 @@ export function buildExhibitionRoom3DScene(params: {
         interactiveObjectGroups.wooden_bed.rotation.y = Math.PI / 2;
         interactiveObjectGroups.wardrobe.position.set(-4.35, 0, 6.08);
         interactiveObjectGroups.study_desk.position.set(-5.25, 0, -4.65);
-        interactiveObjectGroups.spinning_globe.position.set(-4.95, 0.8, -4.45);
+        interactiveObjectGroups.spinning_globe.position.set(-5.23, 0.7945, -5.18);
       } else if (config.furnitureLayoutPreset === 'window_facing') {
         interactiveObjectGroups.wooden_bed.position.set(-4.85, 0, 3.85);
         interactiveObjectGroups.wooden_bed.rotation.y = Math.PI * 0.42;
         interactiveObjectGroups.wardrobe.position.set(-4.15, 0, 6.08);
         interactiveObjectGroups.study_desk.position.set(-5.05, 0, -4.45);
-        interactiveObjectGroups.spinning_globe.position.set(-4.75, 0.8, -4.25);
+        interactiveObjectGroups.spinning_globe.position.set(-5.03, 0.7945, -4.98);
       } else if (config.furnitureLayoutPreset === 'spacious_play') {
         interactiveObjectGroups.wooden_bed.position.set(-5.25, 0, 3.95);
         interactiveObjectGroups.wooden_bed.rotation.y = Math.PI / 2;
         interactiveObjectGroups.wardrobe.position.set(-4.45, 0, 6.12);
         interactiveObjectGroups.study_desk.position.set(-5.35, 0, -4.85);
-        interactiveObjectGroups.spinning_globe.position.set(-5.05, 0.8, -4.65);
+        interactiveObjectGroups.spinning_globe.position.set(-5.33, 0.7945, -5.38);
       }
     }
     if (config.toyArrangementPreset) {
@@ -5945,21 +7329,22 @@ export function buildExhibitionRoom3DScene(params: {
     );
 
     southEntryLight.intensity =
-      rigTargets.southEntryIntensity * state.entranceGlowMultiplier;
+      rigTargets.southEntryIntensity * galleryLightScale * state.entranceGlowMultiplier;
     matEntranceSconceGlow.emissiveIntensity =
       0.95 * state.entranceGlowMultiplier;
 
     roomHemiLight.intensity =
-      rigTargets.hemiIntensity * state.interiorLightFactor;
+      rigTargets.hemiIntensity * galleryHemiScale * state.interiorLightFactor;
     centerCeilingLight.intensity =
       (studioLightIntensityOverride ?? rigTargets.centerIntensity) *
+      galleryLightScale *
       state.interiorLightFactor;
     northWallWasher.intensity =
-      rigTargets.northIntensity * state.interiorLightFactor;
+      rigTargets.northIntensity * galleryLightScale * state.interiorLightFactor;
     westWallWasher.intensity =
-      rigTargets.sideWashIntensity * state.interiorLightFactor;
+      rigTargets.sideWashIntensity * galleryLightScale * state.interiorLightFactor;
     eastWallWasher.intensity =
-      rigTargets.sideWashIntensity * state.interiorLightFactor;
+      rigTargets.sideWashIntensity * galleryLightScale * state.interiorLightFactor;
     matWarmEmissiveStrip.emissiveIntensity = 0.92 * state.interiorLightFactor;
 
     const count = Math.max(1, displayRecords.length);
@@ -6077,14 +7462,14 @@ export function buildExhibitionRoom3DScene(params: {
     if (cricketBatPivot && cricketBallMesh) {
       if (interactiveAnimTimers.cricket_set > 0 && !prefersReduced) {
         const phase = (2.4 - interactiveAnimTimers.cricket_set) / 2.4;
-        cricketBatPivot.rotation.z = -0.28 + Math.sin(phase * Math.PI * 2) * 0.85;
+        cricketBatPivot.rotation.z = 0.25 + Math.sin(phase * Math.PI * 2) * 0.85;
         cricketBallMesh.position.y =
-          0.045 + Math.abs(Math.sin(phase * Math.PI * 2)) * 0.55;
+          0.042 + Math.abs(Math.sin(phase * Math.PI * 2)) * 0.55;
         cricketBallMesh.position.z =
           0.24 + Math.sin(phase * Math.PI) * 0.75;
       } else {
-        cricketBatPivot.rotation.z = -0.28;
-        cricketBallMesh.position.set(0.14, 0.045, 0.24);
+        cricketBatPivot.rotation.z = 0.25;
+        cricketBallMesh.position.set(0.14, 0.042, 0.24);
       }
     }
 
@@ -6128,9 +7513,9 @@ export function buildExhibitionRoom3DScene(params: {
     if (bedPillowBounceGroup) {
       if (interactiveAnimTimers.wooden_bed > 0 && !prefersReduced) {
         bedPillowBounceGroup.position.y =
-          0.56 + Math.abs(Math.sin(elapsedSec * 9)) * 0.11;
+          0.585 + Math.abs(Math.sin(elapsedSec * 9)) * 0.11;
       } else {
-        bedPillowBounceGroup.position.y = 0.56;
+        bedPillowBounceGroup.position.y = 0.585;
       }
     }
 
@@ -6141,6 +7526,23 @@ export function buildExhibitionRoom3DScene(params: {
           ? 0.82
           : 0.85 + Math.sin(elapsedSec * 6) * 0.12
         : 0.28;
+    }
+
+    // 11a. Gentle golden-hour dust motes drifting inside the NW window sunbeam
+    if (bedroomSunDustPoints && bedroomSunDustBasePos && !prefersReduced && rootGroup.visible) {
+      const posAttr = bedroomSunDustPoints.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < posAttr.count; i++) {
+        const bx = bedroomSunDustBasePos[i * 3];
+        const by = bedroomSunDustBasePos[i * 3 + 1];
+        const bz = bedroomSunDustBasePos[i * 3 + 2];
+        posAttr.setXYZ(
+          i,
+          bx + Math.sin(elapsedSec * 0.42 + i * 1.3) * 0.06,
+          by + Math.cos(elapsedSec * 0.34 + i * 0.9) * 0.055,
+          bz + Math.sin(elapsedSec * 0.29 + i * 1.7) * 0.05,
+        );
+      }
+      posAttr.needsUpdate = true;
     }
 
     // 11b. Additive Childhood Bedroom interactive props (pauses automatically when hidden)

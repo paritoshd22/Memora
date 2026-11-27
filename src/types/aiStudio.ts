@@ -296,6 +296,7 @@ export type InteractiveObjectId3D =
   | 'wall_clock_calendar'
   | 'drawing_wall'
   | 'toy_chest'
+  | 'bookshelf'
   | 'toy_train'
   | 'hopscotch'
   | 'cricket_set'
@@ -423,7 +424,10 @@ export type ChildhoodThemeStyleId =
 
 export type MemoryPlacementTarget =
   | 'wall_frame'
+  | 'memory_wall'
   | 'study_desk'
+  | 'bookshelf'
+  | 'toy_box'
   | 'bedside_shelf'
   | 'scrapbook_podium'
   | 'cinema_screen'

@@ -548,6 +548,42 @@ export function normalizeServerVaultRecordToMemory(
     custom3DPosition: Array.isArray(raw.custom3DPosition)
       ? (raw.custom3DPosition as [number, number, number])
       : existingLocal?.custom3DPosition,
+    linked3DObject:
+      typeof raw.linked3DObject === 'string'
+        ? raw.linked3DObject
+        : existingLocal?.linked3DObject,
+    linkedObjectId:
+      typeof raw.linkedObjectId === 'string'
+        ? (raw.linkedObjectId as Memory['linkedObjectId'])
+        : existingLocal?.linkedObjectId,
+    linkedSpaceId:
+      typeof raw.linkedSpaceId === 'string'
+        ? (raw.linkedSpaceId as Memory['linkedSpaceId'])
+        : existingLocal?.linkedSpaceId,
+    linkedActivity:
+      typeof raw.linkedActivity === 'string'
+        ? raw.linkedActivity
+        : existingLocal?.linkedActivity,
+    userProvided:
+      raw.userProvided && typeof raw.userProvided === 'object'
+        ? (raw.userProvided as Memory['userProvided'])
+        : existingLocal?.userProvided,
+    aiSuggestions:
+      raw.aiSuggestions && typeof raw.aiSuggestions === 'object'
+        ? (raw.aiSuggestions as Memory['aiSuggestions'])
+        : existingLocal?.aiSuggestions,
+    confirmationStatus:
+      typeof raw.confirmationStatus === 'string'
+        ? (raw.confirmationStatus as Memory['confirmationStatus'])
+        : existingLocal?.confirmationStatus,
+    assistantNote:
+      typeof raw.assistantNote === 'string'
+        ? raw.assistantNote
+        : existingLocal?.assistantNote,
+    placement3D:
+      raw.placement3D && typeof raw.placement3D === 'object'
+        ? (raw.placement3D as Memory['placement3D'])
+        : existingLocal?.placement3D,
     updatedAt:
       typeof raw.updatedAt === 'string'
         ? raw.updatedAt
@@ -617,31 +653,48 @@ export function mergeServerAndLocalMemories(
   return Array.from(mergedById.values());
 }
 
-function compactMemoryForServerTransport(memory: Record<string, unknown>): Record<string, unknown> {
+const MAX_SERVER_INLINE_MEDIA_CHARS = 14_000_000; // ~10 MB binary in Base64
+
+function compactMemoryForServerTransport(
+  memory: Record<string, unknown>,
+  options?: { allowInlineMedia?: boolean },
+): Record<string, unknown> {
   const id = typeof memory.id === 'string' ? memory.id : '';
+  const allowInline = options?.allowInlineMedia !== false;
+  const maxLen = allowInline ? MAX_SERVER_INLINE_MEDIA_CHARS : 65000;
+
+  const rawMediaUrl = typeof memory.mediaUrl === 'string' ? memory.mediaUrl : undefined;
+  const rawCustomImageUrl =
+    typeof memory.customImageUrl === 'string' ? memory.customImageUrl : undefined;
+
+  // Avoid duplicating identical large data URLs in both mediaUrl and customImageUrl
+  const mediaUrlOut =
+    rawMediaUrl && rawMediaUrl.length > maxLen ? `idb://${id}` : rawMediaUrl;
+  const customImageUrlOut =
+    rawCustomImageUrl && rawCustomImageUrl.length > maxLen
+      ? undefined
+      : rawCustomImageUrl &&
+          rawMediaUrl &&
+          rawCustomImageUrl === rawMediaUrl &&
+          rawCustomImageUrl.startsWith('data:')
+        ? undefined
+        : rawCustomImageUrl;
+
   return {
     ...memory,
     updatedAt:
       typeof memory.updatedAt === 'string'
         ? memory.updatedAt
         : new Date().toISOString(),
-    mediaUrl:
-      typeof memory.mediaUrl === 'string' && memory.mediaUrl.length > 65000
-        ? `idb://${id}`
-        : memory.mediaUrl,
-    customImageUrl:
-      typeof memory.customImageUrl === 'string' &&
-      memory.customImageUrl.length > 65000
-        ? undefined
-        : memory.customImageUrl,
+    mediaUrl: mediaUrlOut,
+    customImageUrl: customImageUrlOut,
   };
 }
 
 /**
- * Saves original media binary to IndexedDB and syncs the memory metadata +
- * approved 3D blueprint to the authenticated server/Supabase vault.
+ * Saves original media binary to IndexedDB and persists the memory record +
+ * original uploaded image/media to the authenticated project server disk vault.
  * IMPORTANT: Never marks `synced: true` until the server confirms `ok: true`.
- * If offline or unconfirmed, queues the operation in the user's offline sync queue.
  */
 export async function syncMemoryRecordToVault(
   memory: {
@@ -660,6 +713,8 @@ export async function syncMemoryRecordToVault(
   synced: boolean;
   queuedOffline: boolean;
   adapter: string;
+  savedMemory?: Record<string, unknown>;
+  errorMessage?: string;
 }> {
   const stampedMemory = {
     ...memory,
@@ -673,7 +728,8 @@ export async function syncMemoryRecordToVault(
   if (
     binaryPayload &&
     typeof binaryPayload === 'string' &&
-    !binaryPayload.startsWith('idb://')
+    !binaryPayload.startsWith('idb://') &&
+    !binaryPayload.startsWith('/api/storage/media/')
   ) {
     await saveMediaToIndexedDb(stampedMemory.id, binaryPayload).catch(() => {});
   }
@@ -684,7 +740,9 @@ export async function syncMemoryRecordToVault(
         kind: 'upsert',
         userId,
         memoryId: stampedMemory.id,
-        memory: compactMemoryForServerTransport(stampedMemory),
+        memory: compactMemoryForServerTransport(stampedMemory, {
+          allowInlineMedia: false,
+        }),
         queuedAt: new Date().toISOString(),
       });
     }
@@ -693,31 +751,45 @@ export async function syncMemoryRecordToVault(
       synced: false,
       queuedOffline: Boolean(userId),
       adapter: 'indexeddb_offline_queue',
+      errorMessage: 'No active curator session available for server persistence.',
     };
   }
 
   try {
     const res = await fetch('/api/storage/memories', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${sessionToken}`,
       },
       body: JSON.stringify({
         userId,
-        memory: compactMemoryForServerTransport({
-          ...stampedMemory,
-          userId,
-        }),
+        memory: compactMemoryForServerTransport(
+          {
+            ...stampedMemory,
+            userId,
+          },
+          { allowInlineMedia: true },
+        ),
       }),
     });
 
     if (!res.ok) {
+      let errMsg = `Server returned HTTP ${res.status}`;
+      try {
+        const errBody = await res.json();
+        if (errBody?.message) errMsg = String(errBody.message);
+      } catch {
+        // ignore JSON parse error
+      }
       enqueueOfflineMemoryChange({
         kind: 'upsert',
         userId,
         memoryId: stampedMemory.id,
-        memory: compactMemoryForServerTransport(stampedMemory),
+        memory: compactMemoryForServerTransport(stampedMemory, {
+          allowInlineMedia: false,
+        }),
         queuedAt: new Date().toISOString(),
       });
       return {
@@ -725,17 +797,26 @@ export async function syncMemoryRecordToVault(
         synced: false,
         queuedOffline: true,
         adapter: 'indexeddb_offline_queue',
+        errorMessage: errMsg,
       };
     }
 
     const data = await res.json();
     const confirmed = Boolean(data?.ok);
+    const savedMemory = Array.isArray(data?.memories)
+      ? (data.memories as Array<Record<string, unknown>>).find(
+          (m) => m && m.id === stampedMemory.id,
+        )
+      : undefined;
+
     if (!confirmed) {
       enqueueOfflineMemoryChange({
         kind: 'upsert',
         userId,
         memoryId: stampedMemory.id,
-        memory: compactMemoryForServerTransport(stampedMemory),
+        memory: compactMemoryForServerTransport(stampedMemory, {
+          allowInlineMedia: false,
+        }),
         queuedAt: new Date().toISOString(),
       });
     }
@@ -746,13 +827,17 @@ export async function syncMemoryRecordToVault(
       adapter: confirmed
         ? data?.adapter || 'server_disk_vault_plus_indexeddb'
         : 'indexeddb_offline_queue',
+      savedMemory,
+      errorMessage: confirmed ? undefined : data?.message || 'Server did not confirm save.',
     };
-  } catch {
+  } catch (err: any) {
     enqueueOfflineMemoryChange({
       kind: 'upsert',
       userId,
       memoryId: stampedMemory.id,
-      memory: compactMemoryForServerTransport(stampedMemory),
+      memory: compactMemoryForServerTransport(stampedMemory, {
+        allowInlineMedia: false,
+      }),
       queuedAt: new Date().toISOString(),
     });
     return {
@@ -760,6 +845,7 @@ export async function syncMemoryRecordToVault(
       synced: false,
       queuedOffline: true,
       adapter: 'indexeddb_offline_queue',
+      errorMessage: String(err?.message || 'Network request failed.'),
     };
   }
 }

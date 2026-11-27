@@ -58,6 +58,7 @@ import {
   BedroomCharacterPoseMode,
   ChildhoodBedroomInteractionController,
 } from '../utils/childhoodBedroomInteractions';
+import { createWarmInteriorEnvironment } from '../utils/childhoodBedroomMaterials';
 import { bedroomSfx } from '../utils/bedroomSfx';
 import { getRoomVisualThemeProfile } from '../utils/roomThemes';
 import {
@@ -2053,16 +2054,20 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
     scene.fog = sceneFog;
 
     let envRenderTarget: THREE.WebGLRenderTarget | null = null;
+    let warmBedroomEnvTarget: THREE.WebGLRenderTarget | null = null;
     try {
       const pmremGenerator = new THREE.PMREMGenerator(renderer);
       const roomEnv = new RoomEnvironment();
       envRenderTarget = pmremGenerator.fromScene(roomEnv, 0.04);
       scene.environment = envRenderTarget.texture;
+      scene.environmentIntensity = 1.0;
       roomEnv.dispose?.();
       pmremGenerator.dispose();
+      warmBedroomEnvTarget = createWarmInteriorEnvironment(renderer);
     } catch (envErr) {
       console.warn('[AtriumScene3D] Fallback environment lighting:', envErr);
     }
+    let lastAtmosphereInChildhood = false;
 
     const initAspect = initW / initH;
     const camera = new THREE.PerspectiveCamera(
@@ -7253,8 +7258,18 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       const nextPx = computeAdaptivePixelRatio();
       renderer.setPixelRatio(nextPx);
       renderer.setSize(cachedViewportW, cachedViewportH);
-      renderer.shadowMap.enabled = qualityConfig.enableShadows;
-      sunKeyLight.castShadow = qualityConfig.enableShadows;
+      const inChildhoodNow = Boolean(
+        activeRoomIdRef.current && activeExhibitionBuilt?.bedroomInteractions,
+      );
+      const allowChildhoodShadows =
+        !isSoftwareGl &&
+        qualityConfig.profileId !== 'desktop_performance' &&
+        qualityConfig.profileId !== 'mobile_performance';
+      const effectiveShadows = inChildhoodNow
+        ? allowChildhoodShadows
+        : qualityConfig.enableShadows;
+      renderer.shadowMap.enabled = effectiveShadows;
+      sunKeyLight.castShadow = !inChildhoodNow && qualityConfig.enableShadows;
       sunKeyLight.shadow.radius = qualityConfig.shadowRadius;
       if (
         sunKeyLight.shadow.mapSize.width !== qualityConfig.shadowMapSize ||
@@ -7269,7 +7284,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
           qualityConfig.shadowMapSize,
         );
       }
-      renderer.shadowMap.needsUpdate = qualityConfig.enableShadows;
+      renderer.shadowMap.needsUpdate = effectiveShadows;
       shadowDirtyFrames = 2;
       // Performance Patch V1: keep animated ambient particles off on desktop.
       // They remain available in source and can be re-enabled after profiling.
@@ -7404,6 +7419,58 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         const inActiveRoom3D = Boolean(
           activeRoomIdRef.current && activeExhibitionBuilt,
         );
+        const inChildhoodBedroom3D = Boolean(
+          inActiveRoom3D && activeExhibitionBuilt?.bedroomInteractions,
+        );
+
+        if (inChildhoodBedroom3D !== lastAtmosphereInChildhood) {
+          lastAtmosphereInChildhood = inChildhoodBedroom3D;
+          const allowChildhoodShadows =
+            !isSoftwareGl &&
+            qualityConfig.profileId !== 'desktop_performance' &&
+            qualityConfig.profileId !== 'mobile_performance';
+          if (inChildhoodBedroom3D) {
+            scene.environment =
+              warmBedroomEnvTarget?.texture || envRenderTarget?.texture || null;
+            scene.environmentIntensity = 0.45;
+            sunKeyLight.visible = false;
+            sunKeyLight.castShadow = false;
+            rimFillLight.visible = false;
+            hemiLight.visible = false;
+            renderer.shadowMap.enabled = allowChildhoodShadows;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            torsoMesh.castShadow = allowChildhoodShadows;
+            coatSkirtMesh.castShadow = allowChildhoodShadows;
+            satchelBag.castShadow = allowChildhoodShadows;
+            headMesh.castShadow = allowChildhoodShadows;
+          } else {
+            scene.environment = envRenderTarget?.texture || null;
+            scene.environmentIntensity = 1.0;
+            sunKeyLight.visible = true;
+            sunKeyLight.castShadow = qualityConfig.enableShadows;
+            rimFillLight.visible = true;
+            hemiLight.visible = true;
+            renderer.shadowMap.enabled = qualityConfig.enableShadows;
+            torsoMesh.castShadow = qualityConfig.enableShadows;
+            coatSkirtMesh.castShadow = qualityConfig.enableShadows;
+            satchelBag.castShadow = qualityConfig.enableShadows;
+            headMesh.castShadow = qualityConfig.enableShadows;
+          }
+          shadowDirtyFrames = 4;
+        }
+
+        if (inChildhoodBedroom3D) {
+          const roomLerp = Math.min(1, delta * 4.5);
+          _targetFogColor.setHex(0xefe7da);
+          sceneFog.color.lerp(_targetFogColor, roomLerp);
+          sceneFog.density = THREE.MathUtils.lerp(sceneFog.density, 0.012, roomLerp);
+          const targetExposure = qualityConfig.enablePostProcessing ? 1.05 : 1.08;
+          renderer.toneMappingExposure = THREE.MathUtils.lerp(
+            renderer.toneMappingExposure,
+            targetExposure,
+            roomLerp,
+          );
+        }
 
         if (!inActiveRoom3D) {
           // Smoothly interpolate Atrium studio lighting mood presets only while in Atrium
@@ -7469,6 +7536,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
             lightLerp,
           );
           sceneFog.color.lerp(_targetFogColor, lightLerp);
+          sceneFog.density = THREE.MathUtils.lerp(sceneFog.density, 0.0085, lightLerp);
+          const atriumExposure = qualityConfig.enablePostProcessing ? 0.98 : 1.04;
+          renderer.toneMappingExposure = THREE.MathUtils.lerp(
+            renderer.toneMappingExposure,
+            atriumExposure,
+            lightLerp,
+          );
 
           if (!reducedMotion) {
             ringOuter.rotation.y = elapsed * 0.25;
@@ -9216,8 +9290,13 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         // On-demand shadow map update: re-render shadow map only when shadows are enabled
         // and a shadow-casting entity (explorer, lift, active room, or rebuilt world) changed.
         if (renderer.shadowMap.enabled) {
+          const childhoodFlashlightActive = Boolean(
+            inChildhoodBedroom3D &&
+              activeExhibitionBuilt?.bedroomInteractions?.isFlashlightHeld(),
+          );
           const shadowSceneMoved =
             shadowDirtyFrames > 0 ||
+            childhoodFlashlightActive ||
             inActiveRoom3D !== lastShadowInRoom ||
             !Number.isFinite(lastShadowPosX) ||
             Math.abs(explorerGroup.position.x - lastShadowPosX) > 0.002 ||
@@ -9360,6 +9439,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
       staticDisposableAssets.forEach((a) => a.dispose());
       staticDisposableAssets.length = 0;
       envRenderTarget?.dispose();
+      warmBedroomEnvTarget?.dispose();
       bloomPass?.dispose();
       composer?.dispose();
       renderer.dispose();
@@ -9389,7 +9469,7 @@ const AtriumScene3DComponent: React.FC<AtriumScene3DProps> = ({
         const previewSig = roomMems
           .map(
             (m) =>
-              `${m.id}:${m.title}:${m.type}:${m.date || ''}:${m.year || ''}:${m.displayOrder ?? ''}:${m.frameStyle || ''}:${m.displayStyleOverride || ''}:${m.motif}:${m.palette}:${m.hiddenFrom3D ? '1' : '0'}:${m.curatedZoneId || ''}:${m.placementTarget || ''}:${m.customImageUrl ? `${m.customImageUrl.length}:${m.customImageUrl.slice(-24)}` : ''}`,
+              `${m.id}:${m.title}:${m.type}:${m.date || ''}:${m.year || ''}:${m.displayOrder ?? ''}:${m.frameStyle || ''}:${m.displayStyleOverride || ''}:${m.motif}:${m.palette}:${m.hiddenFrom3D ? '1' : '0'}:${m.curatedZoneId || ''}:${m.placementTarget || ''}:${m.linkedObjectId || ''}:${m.customImageUrl ? `${m.customImageUrl.length}:${m.customImageUrl.slice(-24)}` : ''}:${m.mediaUrl ? `${m.mediaUrl.length}:${m.mediaUrl.slice(-24)}` : ''}`,
           )
           .join(',');
         return `${r.id}:${r.floorNumber}:${r.slotIndex}:${r.name}:${r.subtitle}:${r.status}:${r.accentColor}:${r.exhibitionStyle || ''}:${r.galleryLayout || ''}:${JSON.stringify(r.designConfig || {})}:${roomMems.length}:${previewSig}`;

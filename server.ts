@@ -9,6 +9,10 @@ import { MemoryCurationService } from './src/server/memoryCurationService';
 import { MemoryVaultService } from './src/server/memoryVaultService';
 import { PlaylistIntegrationService } from './src/server/playlistService';
 import { AIProviderId, AITaskRequest } from './src/types/aiStudio';
+import {
+  CHILDHOOD_WORLD_LOCATION_CATALOGUE,
+  ChildhoodWorldLocationId,
+} from './src/types/curation';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -418,6 +422,143 @@ export async function createServer() {
     }
   });
 
+  // =========================================================================
+  // 1A-2. CHILDHOOD ROOM LIVE GEMINI MEMORY ASSISTANT
+  // =========================================================================
+  app.post('/api/assistant/childhood-memory', storageRateLimiter, async (req, res) => {
+    const authCheck = resolveAuthorizedVaultUserId(req, req.body?.userId);
+    if (!authCheck.ok) {
+      res.status(authCheck.status).json({
+        ok: false,
+        code: authCheck.code,
+        message: authCheck.message,
+      });
+      return;
+    }
+
+    try {
+      const mode =
+        req.body?.mode === 'observe_memory' ? 'observe_memory' : 'chat';
+      const message =
+        typeof req.body?.message === 'string' ? req.body.message : '';
+      const selectedMemoryId =
+        typeof req.body?.selectedMemoryId === 'string'
+          ? req.body.selectedMemoryId
+          : undefined;
+      const history = Array.isArray(req.body?.history) ? req.body.history : [];
+
+      // Always ground in the authenticated user's real saved server vault memories
+      const vaultMemories = memoryVaultService
+        .listUserMemories(authCheck.userId)
+        .filter((m) => (m.roomId || 'childhood') === 'childhood');
+
+      // Also include any room memories passed by the authenticated client for the same user
+      // (e.g. initial starter exhibits) without ever crossing user boundaries.
+      const mergedById = new Map<string, Record<string, unknown>>();
+      for (const m of vaultMemories) {
+        mergedById.set(m.id, m);
+      }
+      if (Array.isArray(req.body?.memories)) {
+        for (const clientMem of req.body.memories) {
+          if (
+            clientMem &&
+            typeof clientMem === 'object' &&
+            typeof clientMem.id === 'string' &&
+            !mergedById.has(clientMem.id)
+          ) {
+            const declaredOwner =
+              typeof clientMem.ownerId === 'string'
+                ? clientMem.ownerId
+                : typeof clientMem.userId === 'string'
+                  ? clientMem.userId
+                  : null;
+            if (!declaredOwner || declaredOwner === authCheck.userId) {
+              mergedById.set(clientMem.id, clientMem);
+            }
+          }
+        }
+      }
+
+      const result = await memoryCurationService.converseWithChildhoodMemories({
+        mode,
+        message,
+        selectedMemoryId,
+        memories: Array.from(mergedById.values()),
+        history,
+      });
+
+      // If Gemini identified a valid move request for a saved memory in the vault, persist it immediately
+      let updatedMemory: Record<string, unknown> | undefined;
+      if (result.ok && result.proposedMove && req.body?.autoApplyMove !== false) {
+        const targetLoc = result.proposedMove
+          .targetLocationId as ChildhoodWorldLocationId;
+        const catalogEntry = CHILDHOOD_WORLD_LOCATION_CATALOGUE[targetLoc];
+        const existingInVault = memoryVaultService.getUserMemory(
+          authCheck.userId,
+          result.proposedMove.memoryId,
+        );
+        const baseRecord =
+          existingInVault || mergedById.get(result.proposedMove.memoryId);
+
+        if (baseRecord && catalogEntry) {
+          const movedRecord = {
+            ...baseRecord,
+            curatedZoneId: targetLoc,
+            placementTarget: catalogEntry.placementTarget,
+            linkedObjectId: catalogEntry.linkedObjectId,
+            linkedSpaceId: catalogEntry.spaceId,
+            linked3DObject: catalogEntry.label,
+            placement3D: {
+              locationId: targetLoc,
+              placementTarget: catalogEntry.placementTarget,
+              linkedObjectId: catalogEntry.linkedObjectId,
+              position: [
+                catalogEntry.anchor.x,
+                catalogEntry.anchor.y,
+                catalogEntry.anchor.z,
+              ],
+            },
+            confirmationStatus: 'user_edited',
+            updatedAt: new Date().toISOString(),
+          };
+          const saveRes = memoryVaultService.upsertUserMemories(
+            authCheck.userId,
+            [movedRecord],
+          );
+          if (saveRes.ok && saveRes.savedRecords[0]) {
+            updatedMemory = saveRes.savedRecords[0];
+          }
+        }
+      }
+
+      const status =
+        result.httpStatus ||
+        (result.ok
+          ? 200
+          : result.code === 'INVALID_INPUT'
+            ? 400
+            : result.code === 'AUTHENTICATION_FAILED'
+              ? 401
+              : result.code === 'RATE_LIMITED'
+                ? 429
+                : 503);
+
+      res.status(status).json({
+        ...result,
+        updatedMemory,
+      });
+    } catch (err: any) {
+      res.status(503).json({
+        ok: false,
+        analyzedBy: 'none',
+        connectionStatus: 'provider_unavailable',
+        code: 'PROVIDER_UNAVAILABLE',
+        retryable: true,
+        message: `Childhood Room assistant failed: ${String(err?.message || err).slice(0, 140)}`,
+      });
+    }
+  });
+
   app.get('/api/storage/curation', storageRateLimiter, (req, res) => {
     const authCheck = resolveAuthorizedVaultUserId(req, req.query.userId);
     if (!authCheck.ok) {
@@ -520,6 +661,47 @@ export async function createServer() {
       count: records.length,
       memories: records,
     });
+  });
+
+  // Serve persisted original uploaded media files strictly to their authenticated owner
+  app.get('/api/storage/media/:memoryId', storageRateLimiter, (req, res) => {
+    const authCheck = resolveAuthorizedVaultUserId(req, req.query.userId);
+    if (!authCheck.ok) {
+      res.status(authCheck.status).json({
+        ok: false,
+        code: authCheck.code,
+        message: authCheck.message,
+      });
+      return;
+    }
+
+    const memoryId = String(req.params.memoryId || '').trim();
+    if (!memoryId) {
+      res.status(400).json({
+        ok: false,
+        code: 'INVALID_MEMORY_ID',
+        message: 'A valid memoryId is required.',
+      });
+      return;
+    }
+
+    const fileResult = memoryVaultService.readUserMediaFile(
+      authCheck.userId,
+      memoryId,
+    );
+    if (!fileResult.ok) {
+      res.status(fileResult.status).json({
+        ok: false,
+        code: fileResult.code,
+        message: 'Requested memory media was not found.',
+      });
+      return;
+    }
+
+    res.setHeader('Content-Type', fileResult.mimeType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.sendFile(fileResult.filePath);
   });
 
   app.post('/api/storage/memories', storageRateLimiter, async (req, res) => {

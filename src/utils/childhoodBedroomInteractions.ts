@@ -4,6 +4,7 @@ import { InteractiveObjectId3D, LivingWorldSpaceId } from '../types/aiStudio';
 import { VisualQualityConfig } from './museumVisualStandards';
 import { getAuthenticMemoryDateLabel } from './roomTextureGenerators';
 import { bedroomSfx } from './bedroomSfx';
+import type { ChildhoodBedroomMaterialLibrary } from './childhoodBedroomMaterials';
 
 export type BedroomCharacterPoseMode =
   | 'idle'
@@ -141,6 +142,7 @@ export interface AttachChildhoodBedroomInteractionsParams {
   matWalnut: THREE.Material;
   matChampagneGold: THREE.Material;
   matBoucleFabric: THREE.Material;
+  bedroomMats?: ChildhoodBedroomMaterialLibrary;
   registerInteractiveHitbox: (
     parent: THREE.Group,
     objectId: InteractiveObjectId3D,
@@ -322,39 +324,78 @@ export function attachChildhoodBedroomInteractions(
   const loadedImages = new Map<string, HTMLImageElement>();
   let isDisposed = false;
 
-  // Shared materials matching existing MEMORA warm palette
-  const matAgedLeather = track(
-    new THREE.MeshStandardMaterial({ color: '#5A3422', roughness: 0.72, metalness: 0.05 }),
-  );
-  const matAgedPaper = track(
-    new THREE.MeshStandardMaterial({ color: '#EFE3CB', roughness: 0.86, metalness: 0.02 }),
-  );
-  const matDarkMetal = track(
-    new THREE.MeshStandardMaterial({ color: '#2F3134', roughness: 0.36, metalness: 0.65 }),
-  );
-  const matBeigePlastic = track(
-    new THREE.MeshStandardMaterial({ color: '#D8CEBA', roughness: 0.52, metalness: 0.06 }),
-  );
-  const matBeigeTrim = track(
-    new THREE.MeshStandardMaterial({ color: '#BFB39B', roughness: 0.58, metalness: 0.05 }),
-  );
-  const matCork = track(
-    new THREE.MeshStandardMaterial({ color: '#B48252', roughness: 0.9, metalness: 0.0 }),
-  );
-  const matCanvasBag = track(
-    new THREE.MeshStandardMaterial({ color: '#4E6759', roughness: 0.85, metalness: 0.02 }),
-  );
-  const matLeatherStrap = track(
-    new THREE.MeshStandardMaterial({ color: '#6A4128', roughness: 0.68, metalness: 0.06 }),
-  );
-  const matCurtainCloth = track(
-    new THREE.MeshStandardMaterial({
-      color: '#E9DCC8',
-      roughness: 0.86,
-      metalness: 0.02,
-      side: THREE.DoubleSide,
-    }),
-  );
+  const bedroomMats = params.bedroomMats;
+  const allowFlashlightShadows =
+    !qualityConfig.isSoftwareGl &&
+    qualityConfig.profileId !== 'desktop_performance' &&
+    qualityConfig.profileId !== 'mobile_performance';
+
+  // Shared PBR materials synced with Childhood Bedroom visual language
+  const matAgedLeather =
+    bedroomMats?.matAgedLeather ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#5A3422', roughness: 0.72, metalness: 0.05 }),
+    );
+  const matAgedPaper =
+    bedroomMats?.matAgedPaper ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#EFE3CB', roughness: 0.88, metalness: 0.02 }),
+    );
+  const matDarkMetal =
+    bedroomMats?.matDarkAnodizedMetal ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#2F3134', roughness: 0.36, metalness: 0.68 }),
+    );
+  const matBeigePlastic =
+    bedroomMats?.matRetroBeigePlastic ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#D8CEBA', roughness: 0.56, metalness: 0.04 }),
+    );
+  const matBeigeTrim =
+    bedroomMats?.matRetroBeigeTrim ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#BFB39B', roughness: 0.62, metalness: 0.04 }),
+    );
+  const matCork =
+    bedroomMats?.matCorkboard ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#B8895A', roughness: 0.9, metalness: 0.0 }),
+    );
+  const matCanvasBag =
+    bedroomMats?.matCanvasBag ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#4E6759', roughness: 0.88, metalness: 0.02 }),
+    );
+  const matLeatherStrap =
+    bedroomMats?.matLeatherStrap ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#6A4128', roughness: 0.68, metalness: 0.04 }),
+    );
+  const matCurtainCloth =
+    bedroomMats?.matCurtainLinen ??
+    track(
+      new THREE.MeshStandardMaterial({
+        color: '#E9DCC8',
+        roughness: 0.88,
+        metalness: 0.02,
+        side: THREE.DoubleSide,
+      }),
+    );
+  const matAntiqueSilver =
+    bedroomMats?.matAntiqueSilver ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#D4D6D8', roughness: 0.24, metalness: 0.88 }),
+    );
+  const matHeadphoneCushion =
+    bedroomMats?.matHeadphoneCushion ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#262320', roughness: 0.78, metalness: 0.04 }),
+    );
+  const matCableRubber =
+    bedroomMats?.matCableRubber ??
+    track(
+      new THREE.MeshStandardMaterial({ color: '#1F1E1C', roughness: 0.82, metalness: 0.05 }),
+    );
 
   const zones: BedroomInteractiveZoneMeta[] = [];
   const tmpWorldPos = new THREE.Vector3();
@@ -388,29 +429,66 @@ export function attachChildhoodBedroomInteractions(
   underBedGroup.name = 'childhood_under_bed_interactive_group';
   bedGroup.add(underBedGroup);
 
-  // 1. 3D Hidden Scrapbook (tucked at bed edge; slides gently into reading view when opened)
+  // 1. 3D Hidden Vintage Scrapbook (sits flush on cream rug / oak floor in open under-bed space + subtle dust motes)
   const scrapbookGroup = new THREE.Group();
   scrapbookGroup.name = 'under_bed_scrapbook_3d';
-  const scrapbookRestPos = new THREE.Vector3(0.45, 0.045, 0.96);
-  const scrapbookReadPos = new THREE.Vector3(0.08, 0.06, 1.38);
+  const scrapbookRestPos = new THREE.Vector3(0.42, 0.039, 0.92);
+  const scrapbookReadPos = new THREE.Vector3(0.08, 0.042, 1.38);
   scrapbookGroup.position.copy(scrapbookRestPos);
   underBedGroup.add(scrapbookGroup);
 
   const bookBaseCover = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.46, 0.024, 0.34)),
+    track(new THREE.BoxGeometry(0.47, 0.018, 0.35)),
     matAgedLeather,
   );
+  bookBaseCover.position.y = -0.002;
   scrapbookGroup.add(bookBaseCover);
 
-  // Gold corner clasps on scrapbook cover
-  const cornerGeo = track(new THREE.BoxGeometry(0.036, 0.028, 0.036));
+  // Thick stacked aged-parchment page blocks on left & right of open binding
+  [-0.112, 0.112].forEach((px) => {
+    const pageBlock = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.214, 0.014, 0.308)),
+      matAgedPaper,
+    );
+    pageBlock.position.set(px, 0.009, 0);
+    scrapbookGroup.add(pageBlock);
+  });
+
+  // Rounded ribbed vintage leather spine + burgundy silk bookmark ribbon
+  const bookSpine = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.016, 0.016, 0.352, 12)),
+    matAgedLeather,
+  );
+  bookSpine.rotation.x = Math.PI / 2;
+  bookSpine.position.set(0, 0.004, 0);
+  scrapbookGroup.add(bookSpine);
+
+  [-0.11, -0.035, 0.035, 0.11].forEach((rz) => {
+    const spineRib = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.0165, 0.003, 6, 12)),
+      matChampagneGold,
+    );
+    spineRib.position.set(0, 0.004, rz);
+    scrapbookGroup.add(spineRib);
+  });
+
+  const bookmarkRibbon = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.016, 0.003, 0.22)),
+    track(new THREE.MeshStandardMaterial({ color: '#8E2B2E', roughness: 0.72 })),
+  );
+  bookmarkRibbon.position.set(0.02, 0.016, 0.14);
+  bookmarkRibbon.rotation.y = 0.22;
+  scrapbookGroup.add(bookmarkRibbon);
+
+  // Brass corner clasps on vintage scrapbook cover
+  const cornerGeo = track(new THREE.BoxGeometry(0.038, 0.024, 0.038));
   const cornerInst = new THREE.InstancedMesh(cornerGeo, matChampagneGold, 4);
   const cDummy = new THREE.Object3D();
   [
-    [-0.215, 0.002, -0.155],
-    [0.215, 0.002, -0.155],
-    [-0.215, 0.002, 0.155],
-    [0.215, 0.002, 0.155],
+    [-0.22, 0.001, -0.16],
+    [0.22, 0.001, -0.16],
+    [-0.22, 0.001, 0.16],
+    [0.22, 0.001, 0.16],
   ].forEach(([cx, cy, cz], idx) => {
     cDummy.position.set(cx, cy, cz);
     cDummy.updateMatrix();
@@ -418,6 +496,37 @@ export function attachChildhoodBedroomInteractions(
   });
   cornerInst.instanceMatrix.needsUpdate = true;
   scrapbookGroup.add(cornerInst);
+
+  // Subtle ambient golden dust motes drifting beneath the open bed frame around the scrapbook
+  const underBedDustCount =
+    qualityConfig.profileId === 'desktop_performance' ||
+    qualityConfig.profileId === 'mobile_performance'
+      ? 0
+      : 26;
+  let underBedDustPoints: THREE.Points | null = null;
+  let underBedDustPositions: Float32Array | null = null;
+  if (underBedDustCount > 0) {
+    underBedDustPositions = new Float32Array(underBedDustCount * 3);
+    for (let i = 0; i < underBedDustCount; i++) {
+      underBedDustPositions[i * 3] = Math.sin(i * 7.3) * 0.56;
+      underBedDustPositions[i * 3 + 1] = 0.04 + ((i * 0.073) % 0.19);
+      underBedDustPositions[i * 3 + 2] = -0.55 + (i / underBedDustCount) * 1.65;
+    }
+    const ubDustGeo = track(new THREE.BufferGeometry());
+    ubDustGeo.setAttribute('position', new THREE.BufferAttribute(underBedDustPositions, 3));
+    const ubDustMat = track(
+      new THREE.PointsMaterial({
+        color: '#F5E4BE',
+        size: 0.015,
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    underBedDustPoints = new THREE.Points(ubDustGeo, ubDustMat);
+    underBedGroup.add(underBedDustPoints);
+  }
 
   // Left & Right 3D CanvasTexture pages
   const leftPageCanvas = document.createElement('canvas');
@@ -655,42 +764,119 @@ export function attachChildhoodBedroomInteractions(
     },
   });
 
-  // 2. Under-Bed Flashlight (Ground prop + Mouth-held attachment + Single SpotLight + Capped Dust)
+  // 2. Under-Bed Realistic Flashlight (Ground prop flush on rug + Mouth-held attachment + Shadowed SpotLight + Dust)
   const flashlightGroundGroup = new THREE.Group();
   flashlightGroundGroup.name = 'under_bed_flashlight_ground';
-  flashlightGroundGroup.position.set(-0.34, 0.045, 0.92);
-  flashlightGroundGroup.rotation.y = 0.55;
+  flashlightGroundGroup.position.set(-0.34, 0.056, 0.92);
+  flashlightGroundGroup.rotation.set(-0.05, 0.55, 0);
   underBedGroup.add(flashlightGroundGroup);
 
-  const buildFlashlightMesh = (parent: THREE.Group) => {
+  const buildFlashlightMesh = (parent: THREE.Group, enableShadows = false) => {
+    // Rubberized tail cap & mouth bite-grip collar (centered near z = -0.02 for clean mouth grip)
+    const tailGrip = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.022, 0.021, 0.055, 14)),
+      matCableRubber,
+    );
+    tailGrip.rotation.x = Math.PI / 2;
+    tailGrip.position.z = -0.015;
+    parent.add(tailGrip);
+
+    // Knurled dark anodized aluminum flashlight barrel
     const body = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.026, 0.024, 0.2, 12)),
+      track(new THREE.CylinderGeometry(0.024, 0.023, 0.145, 16)),
       matDarkMetal,
     );
     body.rotation.x = Math.PI / 2;
+    body.position.z = 0.075;
     parent.add(body);
-    const bezel = new THREE.Mesh(
-      track(new THREE.CylinderGeometry(0.036, 0.028, 0.045, 12)),
+
+    // Tactile grip rings along barrel
+    [0.035, 0.062, 0.089].forEach((rz) => {
+      const ring = new THREE.Mesh(
+        track(new THREE.TorusGeometry(0.0245, 0.0025, 6, 16)),
+        matCableRubber,
+      );
+      ring.position.z = rz;
+      parent.add(ring);
+    });
+
+    // Brass thumb slide power switch on top of barrel
+    const thumbSwitch = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.012, 0.009, 0.026)),
       matChampagneGold,
     );
-    bezel.rotation.x = Math.PI / 2;
-    bezel.position.z = 0.11;
+    thumbSwitch.position.set(0, 0.026, 0.105);
+    parent.add(thumbSwitch);
+
+    // Flared lamp head cone & polished brass bezel ring
+    const headFlare = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.037, 0.025, 0.048, 16)),
+      matDarkMetal,
+    );
+    headFlare.rotation.x = Math.PI / 2;
+    headFlare.position.z = 0.168;
+    parent.add(headFlare);
+
+    const bezel = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.0365, 0.0045, 8, 18)),
+      matChampagneGold,
+    );
+    bezel.position.z = 0.193;
     parent.add(bezel);
-    const lens = new THREE.Mesh(
-      track(new THREE.CircleGeometry(0.031, 12)),
+
+    // Recessed silver parabolic reflector + glowing filament bulb + convex glass lens
+    const reflector = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.033, 0.012, 0.024, 16, 1, true)),
+      matAntiqueSilver,
+    );
+    reflector.rotation.x = Math.PI / 2;
+    reflector.position.z = 0.181;
+    parent.add(reflector);
+
+    const bulb = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.01, 10, 8)),
       track(
         new THREE.MeshStandardMaterial({
-          color: '#FFF8DF',
-          emissive: new THREE.Color('#FFE6A3'),
-          emissiveIntensity: 0.75,
-          roughness: 0.15,
+          color: '#FFFDF2',
+          emissive: new THREE.Color('#FFE8A6'),
+          emissiveIntensity: 1.4,
+          roughness: 0.12,
         }),
       ),
     );
-    lens.position.z = 0.133;
+    bulb.position.z = 0.175;
+    parent.add(bulb);
+
+    const lens = new THREE.Mesh(
+      track(new THREE.SphereGeometry(0.033, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.35)),
+      track(
+        new THREE.MeshStandardMaterial({
+          color: '#FFF9E4',
+          emissive: new THREE.Color('#FFE4A0'),
+          emissiveIntensity: 0.72,
+          roughness: 0.08,
+          metalness: 0.12,
+          transparent: true,
+          opacity: 0.85,
+        }),
+      ),
+    );
+    lens.rotation.x = Math.PI / 2;
+    lens.position.z = 0.176;
     parent.add(lens);
+
+    if (enableShadows) {
+      parent.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const m = obj as THREE.Mesh;
+          const isOptical = m === bulb || m === lens || m === reflector;
+          m.castShadow = !isOptical && allowFlashlightShadows;
+          m.receiveShadow = !isOptical;
+        }
+      });
+    }
   };
-  buildFlashlightMesh(flashlightGroundGroup);
+  buildFlashlightMesh(flashlightGroundGroup, false);
 
   registerInteractiveHitbox(
     flashlightGroundGroup,
@@ -699,7 +885,7 @@ export function attachChildhoodBedroomInteractions(
     'Under-Bed Flashlight',
     'Press [E] or click to hold flashlight in mouth & light up under the bed',
     [0.42, 0.24, 0.42],
-    [0, 0.06, 0],
+    [0, 0.06, 0.08],
   );
 
   zones.push({
@@ -723,56 +909,58 @@ export function attachChildhoodBedroomInteractions(
     },
   });
 
-  // Mouth-held flashlight group (attached to character headMesh only while held)
+  // Mouth-held flashlight group (attached cleanly to character headMesh mouth point while held)
   const mouthFlashlightGroup = new THREE.Group();
   mouthFlashlightGroup.name = 'mouth_held_flashlight_prop';
   mouthFlashlightGroup.visible = false;
-  buildFlashlightMesh(mouthFlashlightGroup);
+  buildFlashlightMesh(mouthFlashlightGroup, true);
 
-  // Subtle volumetric beam cone (lightweight additive mesh)
+  // Subtle volumetric flashlight beam cone (soft additive falloff)
   const beamConeMat = track(
     new THREE.MeshBasicMaterial({
-      color: '#FFE9B5',
+      color: '#FFECC0',
       transparent: true,
-      opacity: 0.075,
+      opacity: 0.068,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
     }),
   );
   const beamCone = new THREE.Mesh(
-    track(new THREE.ConeGeometry(0.65, 2.6, 16, 1, true)),
+    track(new THREE.ConeGeometry(0.68, 2.7, 20, 1, true)),
     beamConeMat,
   );
   beamCone.rotation.x = -Math.PI / 2;
-  beamCone.position.z = 1.44;
+  beamCone.position.z = 1.54;
+  beamCone.castShadow = false;
+  beamCone.receiveShadow = false;
   mouthFlashlightGroup.add(beamCone);
 
-  // Capped flashlight dust particles (respecting qualityConfig; 0 on performance profiles)
+  // Capped flashlight beam dust particles (respecting qualityConfig; 0 on performance profiles)
   const moteCount =
     qualityConfig.profileId === 'desktop_performance' ||
     qualityConfig.profileId === 'mobile_performance'
       ? 0
-      : 22;
+      : 28;
   let flashlightDustPoints: THREE.Points | null = null;
   let flashlightDustPositions: Float32Array | null = null;
   if (moteCount > 0) {
     flashlightDustPositions = new Float32Array(moteCount * 3);
     for (let i = 0; i < moteCount; i++) {
-      const dist = 0.35 + (i / moteCount) * 2.1;
-      const spread = dist * 0.22;
-      flashlightDustPositions[i * 3] = (Math.sin(i * 12.7) * 0.5) * spread;
-      flashlightDustPositions[i * 3 + 1] = (Math.cos(i * 9.3) * 0.5) * spread;
+      const dist = 0.36 + (i / moteCount) * 2.25;
+      const spread = dist * 0.24;
+      flashlightDustPositions[i * 3] = Math.sin(i * 12.7) * 0.5 * spread;
+      flashlightDustPositions[i * 3 + 1] = Math.cos(i * 9.3) * 0.5 * spread;
       flashlightDustPositions[i * 3 + 2] = dist;
     }
     const dustGeo = track(new THREE.BufferGeometry());
     dustGeo.setAttribute('position', new THREE.BufferAttribute(flashlightDustPositions, 3));
     const dustMat = track(
       new THREE.PointsMaterial({
-        color: '#FFF2CC',
+        color: '#FFF4D2',
         size: 0.022,
         transparent: true,
-        opacity: 0.55,
+        opacity: 0.58,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
@@ -781,13 +969,18 @@ export function attachChildhoodBedroomInteractions(
     mouthFlashlightGroup.add(flashlightDustPoints);
   }
 
-  // Single flashlight SpotLight (disabled & 0 intensity unless held; small 512x512 shadow map only when enabled)
-  const flashlightSpot = new THREE.SpotLight(0xfff1cc, 0, 8.2, Math.PI * 0.22, 0.58, 1.4);
+  // Single flashlight SpotLight with crisp 1024x1024 shadow map (originates ahead of lens tip to avoid head self-shadowing)
+  const flashlightSpot = new THREE.SpotLight(0xfff1cc, 0, 9.2, Math.PI * 0.22, 0.62, 1.45);
   flashlightSpot.visible = false;
   flashlightSpot.castShadow = false;
-  flashlightSpot.shadow.mapSize.set(512, 512);
-  flashlightSpot.shadow.bias = -0.0006;
+  flashlightSpot.shadow.mapSize.set(1024, 1024);
+  flashlightSpot.shadow.camera.near = 0.08;
+  flashlightSpot.shadow.camera.far = 9.2;
+  flashlightSpot.shadow.bias = -0.0003;
+  flashlightSpot.shadow.normalBias = 0.014;
+  flashlightSpot.shadow.radius = 2.8;
   const flashlightTargetObj = new THREE.Object3D();
+  const tmpFlashlightLensWorld = new THREE.Vector3();
   rootGroup.add(flashlightSpot);
   rootGroup.add(flashlightTargetObj);
   flashlightSpot.target = flashlightTargetObj;
@@ -878,35 +1071,101 @@ export function attachChildhoodBedroomInteractions(
   trophyShelfGroup.rotation.y = Math.PI / 2;
   bedroomSpaceGroup.add(trophyShelfGroup);
 
-  const shelfBack = new THREE.Mesh(
-    track(new THREE.BoxGeometry(1.18, 1.82, 0.06)),
+  const shelfPlinth = new THREE.Mesh(
+    track(new THREE.BoxGeometry(1.24, 0.08, 0.34)),
     matWalnut,
   );
-  shelfBack.position.set(0, 0.95, -0.14);
+  shelfPlinth.position.set(0, 0.04, -0.01);
+  trophyShelfGroup.add(shelfPlinth);
+
+  const shelfBack = new THREE.Mesh(
+    track(new THREE.BoxGeometry(1.18, 1.88, 0.05)),
+    matWalnut,
+  );
+  shelfBack.position.set(0, 0.98, -0.14);
   trophyShelfGroup.add(shelfBack);
   cameraObstacleMeshes.push(shelfBack);
 
+  [-0.58, 0.58].forEach((sx) => {
+    const sideStile = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.045, 1.88, 0.3)),
+      matWalnut,
+    );
+    sideStile.position.set(sx, 0.98, -0.01);
+    trophyShelfGroup.add(sideStile);
+  });
+
+  const shelfCrown = new THREE.Mesh(
+    track(new THREE.BoxGeometry(1.26, 0.07, 0.35)),
+    matWalnut,
+  );
+  shelfCrown.position.set(0, 1.94, 0);
+  trophyShelfGroup.add(shelfCrown);
+
   [0.55, 1.02, 1.52].forEach((sy) => {
     const plank = new THREE.Mesh(
-      track(new THREE.BoxGeometry(1.14, 0.04, 0.28)),
+      track(new THREE.BoxGeometry(1.14, 0.04, 0.29)),
       matWalnut,
     );
     plank.position.set(0, sy, -0.01);
     trophyShelfGroup.add(plank);
+
+    const trimLip = new THREE.Mesh(
+      track(new THREE.BoxGeometry(1.14, 0.012, 0.012)),
+      matChampagneGold,
+    );
+    trimLip.position.set(0, sy, 0.138);
+    trophyShelfGroup.add(trimLip);
   });
 
-  // 3 Polished Brass Trophies on middle shelf
-  const cupGeo = track(new THREE.CylinderGeometry(0.055, 0.028, 0.13, 12));
-  const cupBaseGeo = track(new THREE.BoxGeometry(0.08, 0.04, 0.08));
+  // 3 Sculpted LatheGeometry Polished Brass & Antique Silver Chalice Trophies with Dual Handles & Plaques
+  const chaliceProfile = [
+    new THREE.Vector2(0.0, 0.0),
+    new THREE.Vector2(0.036, 0.0),
+    new THREE.Vector2(0.028, 0.014),
+    new THREE.Vector2(0.012, 0.024),
+    new THREE.Vector2(0.011, 0.056),
+    new THREE.Vector2(0.018, 0.068),
+    new THREE.Vector2(0.042, 0.088),
+    new THREE.Vector2(0.058, 0.135),
+    new THREE.Vector2(0.064, 0.165),
+    new THREE.Vector2(0.058, 0.165),
+    new THREE.Vector2(0.048, 0.125),
+    new THREE.Vector2(0.014, 0.086),
+    new THREE.Vector2(0.0, 0.086),
+  ];
+  const chaliceGeo = track(new THREE.LatheGeometry(chaliceProfile, 20));
+  const trophyHandleGeo = track(new THREE.TorusGeometry(0.028, 0.005, 8, 14, Math.PI * 1.15));
+  const cupBaseGeo = track(new THREE.BoxGeometry(0.095, 0.046, 0.095));
+  const plaqueGeo = track(new THREE.BoxGeometry(0.058, 0.024, 0.006));
+
   [-0.36, 0, 0.36].forEach((tx, idx) => {
-    const scaleH = idx === 1 ? 1.24 : 0.96;
+    const scaleH = idx === 1 ? 1.24 : idx === 0 ? 1.02 : 0.94;
+    const trophyMat = idx === 2 ? matAntiqueSilver : matChampagneGold;
+    const trophyGrp = new THREE.Group();
+    trophyGrp.position.set(tx, 1.04, 0.02);
+    trophyShelfGroup.add(trophyGrp);
+
     const base = new THREE.Mesh(cupBaseGeo, matWalnut);
-    base.position.set(tx, 1.06, 0.02);
-    trophyShelfGroup.add(base);
-    const cup = new THREE.Mesh(cupGeo, matChampagneGold);
-    cup.scale.set(1, scaleH, 1);
-    cup.position.set(tx, 1.14 + (scaleH - 1) * 0.06, 0.02);
-    trophyShelfGroup.add(cup);
+    base.position.y = 0.023;
+    trophyGrp.add(base);
+
+    const plaque = new THREE.Mesh(plaqueGeo, matChampagneGold);
+    plaque.position.set(0, 0.023, 0.049);
+    trophyGrp.add(plaque);
+
+    const cup = new THREE.Mesh(chaliceGeo, trophyMat);
+    cup.scale.set(scaleH * 0.95, scaleH, scaleH * 0.95);
+    cup.position.y = 0.046;
+    trophyGrp.add(cup);
+
+    [-1, 1].forEach((side) => {
+      const handle = new THREE.Mesh(trophyHandleGeo, trophyMat);
+      handle.position.set(side * 0.052 * scaleH * 0.95, 0.046 + 0.125 * scaleH, 0);
+      handle.rotation.z = side < 0 ? Math.PI * 0.48 : -Math.PI * 0.58;
+      handle.scale.setScalar(scaleH * 0.92);
+      trophyGrp.add(handle);
+    });
   });
 
   // 3 Framed Certificate Slots on upper shelf (strictly real uploaded certificate/achievement memories)
@@ -965,24 +1224,65 @@ export function attachChildhoodBedroomInteractions(
     return tex;
   };
 
+  const certGlassMat = track(
+    new THREE.MeshPhysicalMaterial({
+      color: '#FFFDF8',
+      roughness: 0.08,
+      metalness: 0.02,
+      clearcoat: 0.4,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    }),
+  );
   [-0.36, 0, 0.36].forEach((fx, idx) => {
     const certMem = certificateMemories[idx];
     const frameGroup = new THREE.Group();
-    frameGroup.position.set(fx, 1.68, -0.02);
+    // Seated flush on top shelf plank (y = 1.54 -> center y = 1.665 for 0.255m tall tilted frame)
+    frameGroup.position.set(fx, 1.665, -0.02);
+    frameGroup.rotation.x = -0.08;
     trophyShelfGroup.add(frameGroup);
 
-    const frameBorder = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.3, 0.24, 0.028)),
+    const frameOuter = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.32, 0.255, 0.024)),
+      matWalnut,
+    );
+    frameGroup.add(frameOuter);
+
+    // Rear walnut easel stand prop grounding the tilted frame cleanly on the shelf
+    const easelLeg = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.055, 0.18, 0.01)),
+      matWalnut,
+    );
+    easelLeg.position.set(0, -0.032, -0.048);
+    easelLeg.rotation.x = 0.42;
+    frameGroup.add(easelLeg);
+
+    const frameGoldFillet = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.285, 0.22, 0.027)),
       matChampagneGold,
     );
-    frameGroup.add(frameBorder);
+    frameGroup.add(frameGoldFillet);
     const certTex = buildMiniFrameTexture(certMem, 'Certificate Slot', '#B88C4A');
     const certPlane = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(0.26, 0.2)),
-      track(new THREE.MeshBasicMaterial({ map: certTex })),
+      track(new THREE.PlaneGeometry(0.26, 0.195)),
+      track(
+        new THREE.MeshStandardMaterial({
+          map: certTex,
+          roughness: 0.44,
+          metalness: 0.02,
+        }),
+      ),
     );
-    certPlane.position.z = 0.016;
+    certPlane.position.z = 0.015;
     frameGroup.add(certPlane);
+
+    const certGlass = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(0.264, 0.198)),
+      certGlassMat,
+    );
+    certGlass.position.z = 0.0165;
+    frameGroup.add(certGlass);
   });
 
   registerInteractiveHitbox(
@@ -1011,24 +1311,24 @@ export function attachChildhoodBedroomInteractions(
     }),
   });
 
-  // 2. Cork Pinboard (free space in NW study perimeter at x = -3.55, z = -6.25 facing +Z)
+  // 2. Warm Cork Pinboard (#B8895A, roughness ~0.90) with Vintage Photo Prints & Corner Push Pins
   const pinboardGroup = new THREE.Group();
   pinboardGroup.name = 'childhood_cork_pinboard_group';
   pinboardGroup.position.set(-3.55, 0, -6.25);
   studyCornerSpaceGroup.add(pinboardGroup);
 
-  // Slim walnut easel legs supporting the pinboard cleanly in open space
+  // Walnut frame posts planted flush on oak floorboards
   [-0.58, 0.58].forEach((lx) => {
     const post = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.05, 1.85, 0.05)),
+      track(new THREE.BoxGeometry(0.05, 1.86, 0.05)),
       matWalnut,
     );
-    post.position.set(lx, 0.925, -0.02);
+    post.position.set(lx, 0.93, -0.02);
     pinboardGroup.add(post);
   });
 
   const corkFrame = new THREE.Mesh(
-    track(new THREE.BoxGeometry(1.32, 0.92, 0.05)),
+    track(new THREE.BoxGeometry(1.34, 0.94, 0.052)),
     matWalnut,
   );
   corkFrame.position.set(0, 1.42, 0);
@@ -1042,39 +1342,81 @@ export function attachChildhoodBedroomInteractions(
   corkSurface.position.set(0, 1.42, 0.02);
   pinboardGroup.add(corkSurface);
 
-  // Up to 6 pinned real uploaded photos with instanced pushpins
-  const pinGeo = track(new THREE.SphereGeometry(0.016, 8, 8));
-  const pinMat = track(new THREE.MeshStandardMaterial({ color: '#C84B31', roughness: 0.35 }));
-  const pinInst = new THREE.InstancedMesh(pinGeo, pinMat, 6);
-  const pinDummy = new THREE.Object3D();
+  // Up to 6 vintage-styled Polaroid photo prints with corner push pins (strictly real uploaded photos / empty state)
+  const pinHeadGeo = track(new THREE.CylinderGeometry(0.009, 0.012, 0.016, 10));
+  const pinShaftGeo = track(new THREE.CylinderGeometry(0.002, 0.002, 0.016, 6));
+  const pinPalette = ['#B83B2E', '#2F6652', '#C98A32', '#355A7A', '#A8485C', '#B8893A'];
+  const pinMats = pinPalette.map((hex) =>
+    track(new THREE.MeshStandardMaterial({ color: hex, roughness: 0.32, metalness: 0.12 })),
+  );
+  const polaroidBackingMat = track(
+    new THREE.MeshStandardMaterial({ color: '#F6F0E4', roughness: 0.84 }),
+  );
   const pinSlots: [number, number, number][] = [
-    [-0.38, 1.6, -0.06],
-    [0, 1.62, 0.04],
-    [0.38, 1.59, -0.04],
-    [-0.36, 1.24, 0.05],
-    [0.02, 1.22, -0.05],
-    [0.39, 1.25, 0.03],
+    [-0.38, 1.6, -0.055],
+    [0, 1.62, 0.038],
+    [0.38, 1.59, -0.042],
+    [-0.36, 1.23, 0.048],
+    [0.02, 1.21, -0.045],
+    [0.39, 1.24, 0.032],
   ];
   pinSlots.forEach(([px, py, rotZ], idx) => {
     const pMem = photoMemories[idx];
-    const card = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(0.3, 0.24)),
+    const printGroup = new THREE.Group();
+    printGroup.position.set(px, py, 0.035);
+    printGroup.rotation.z = rotZ;
+    pinboardGroup.add(printGroup);
+
+    // Subtle contact drop-shadow card lifting vintage Polaroid slightly off the corkboard
+    const cardShadow = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(0.326, 0.282)),
       track(
         new THREE.MeshBasicMaterial({
-          map: buildMiniFrameTexture(pMem, 'Pinned Photo', '#C9A66B'),
+          color: '#2B1D10',
+          transparent: true,
+          opacity: 0.22,
+          depthWrite: false,
         }),
       ),
     );
-    card.position.set(px, py, 0.036);
-    card.rotation.z = rotZ;
-    pinboardGroup.add(card);
+    cardShadow.position.set(0.005, -0.017, -0.0015);
+    printGroup.add(cardShadow);
 
-    pinDummy.position.set(px, py + 0.1, 0.045);
-    pinDummy.updateMatrix();
-    pinInst.setMatrixAt(idx, pinDummy.matrix);
+    // Cream vintage Polaroid paper card with wider bottom margin
+    const polaroidCard = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.32, 0.275, 0.005)),
+      polaroidBackingMat,
+    );
+    polaroidCard.position.set(0, -0.012, 0);
+    printGroup.add(polaroidCard);
+
+    const card = new THREE.Mesh(
+      track(new THREE.PlaneGeometry(0.286, 0.214)),
+      track(
+        new THREE.MeshStandardMaterial({
+          map: buildMiniFrameTexture(pMem, 'Pinned Photo', '#C9A66B'),
+          roughness: 0.56,
+          metalness: 0.0,
+        }),
+      ),
+    );
+    card.position.set(0, 0.005, 0.004);
+    printGroup.add(card);
+
+    // Dual corner push pins (top-left & top-right corners of each vintage print)
+    const pMat = pinMats[idx % pinMats.length];
+    [-0.13, 0.13].forEach((cx) => {
+      const pinHead = new THREE.Mesh(pinHeadGeo, pMat);
+      pinHead.rotation.x = Math.PI / 2;
+      pinHead.position.set(cx, 0.105, 0.014);
+      printGroup.add(pinHead);
+
+      const pinShaft = new THREE.Mesh(pinShaftGeo, matAntiqueSilver);
+      pinShaft.rotation.x = Math.PI / 2;
+      pinShaft.position.set(cx, 0.105, 0.005);
+      printGroup.add(pinShaft);
+    });
   });
-  pinInst.instanceMatrix.needsUpdate = true;
-  pinboardGroup.add(pinInst);
 
   registerInteractiveHitbox(
     pinboardGroup,
@@ -1124,6 +1466,14 @@ export function attachChildhoodBedroomInteractions(
   artRail.position.set(0, 1.84, -0.02);
   drawingWallGroup.add(artRail);
 
+  const tapeMat = track(
+    new THREE.MeshStandardMaterial({
+      color: '#EFE5C8',
+      roughness: 0.85,
+      transparent: true,
+      opacity: 0.88,
+    }),
+  );
   [
     [-0.28, 1.46, -0.03],
     [0.28, 1.48, 0.04],
@@ -1131,17 +1481,29 @@ export function attachChildhoodBedroomInteractions(
     [0.27, 0.96, -0.03],
   ].forEach(([dx, dy, rz], idx) => {
     const drawMem = effectiveDrawings[idx];
+    const sheetGroup = new THREE.Group();
+    sheetGroup.position.set(dx, dy, 0.005);
+    sheetGroup.rotation.z = rz;
+    drawingWallGroup.add(sheetGroup);
+
     const sheet = new THREE.Mesh(
       track(new THREE.PlaneGeometry(0.42, 0.34)),
       track(
-        new THREE.MeshBasicMaterial({
+        new THREE.MeshStandardMaterial({
           map: buildMiniFrameTexture(drawMem, 'Drawing Slot', '#D18B47'),
+          roughness: 0.84,
+          metalness: 0.0,
         }),
       ),
     );
-    sheet.position.set(dx, dy, 0.005);
-    sheet.rotation.z = rz;
-    drawingWallGroup.add(sheet);
+    sheetGroup.add(sheet);
+
+    [-0.17, 0.17].forEach((tx) => {
+      const tape = new THREE.Mesh(track(new THREE.BoxGeometry(0.068, 0.02, 0.003)), tapeMat);
+      tape.position.set(tx, 0.158, 0.0025);
+      tape.rotation.z = tx < 0 ? 0.42 : -0.42;
+      sheetGroup.add(tape);
+    });
   });
 
   registerInteractiveHitbox(
@@ -1177,40 +1539,88 @@ export function attachChildhoodBedroomInteractions(
   crtSetupGroup.name = 'childhood_retro_crt_computer_group';
   deskGroup.add(crtSetupGroup);
 
-  // CRT Monitor positioned on center-right of desk top (lamp is at x=-0.42, globe is outside)
+  // CRT Monitor positioned flush on center-right of desk top (y = 0.795)
   const crtMonitorGroup = new THREE.Group();
-  crtMonitorGroup.position.set(0.14, 0.8, -0.1);
+  crtMonitorGroup.position.set(0.14, 0.795, -0.1);
   crtSetupGroup.add(crtMonitorGroup);
 
   const crtStandBase = new THREE.Mesh(
-    track(new THREE.CylinderGeometry(0.13, 0.16, 0.045, 16)),
+    track(new THREE.CylinderGeometry(0.125, 0.155, 0.036, 20)),
     matBeigeTrim,
   );
-  crtStandBase.position.set(0, 0.022, 0);
+  crtStandBase.position.set(0, 0.018, 0);
   crtMonitorGroup.add(crtStandBase);
 
+  const crtSwivelNeck = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.068, 0.085, 0.042, 16)),
+    matBeigeTrim,
+  );
+  crtSwivelNeck.position.set(0, 0.052, 0);
+  crtMonitorGroup.add(crtSwivelNeck);
+
+  // Main beige CRT chassis + stepped upper/lower bevels + tapered rear tube with vent louvers
   const crtChassis = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.46, 0.37, 0.24)),
+    track(new THREE.BoxGeometry(0.46, 0.37, 0.23)),
     matBeigePlastic,
   );
-  crtChassis.position.set(0, 0.23, 0.02);
+  crtChassis.position.set(0, 0.24, 0.02);
   crtMonitorGroup.add(crtChassis);
+
+  const crtFrontFrame = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.45, 0.36, 0.032)),
+    matBeigePlastic,
+  );
+  crtFrontFrame.position.set(0, 0.24, 0.132);
+  crtMonitorGroup.add(crtFrontFrame);
 
   const crtRearTube = new THREE.Mesh(
     track(new THREE.BoxGeometry(0.32, 0.26, 0.16)),
     matBeigeTrim,
   );
-  crtRearTube.position.set(0, 0.23, -0.16);
+  crtRearTube.position.set(0, 0.24, -0.155);
   crtMonitorGroup.add(crtRearTube);
 
+  const crtRearCap = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.22, 0.18, 0.075)),
+    matBeigeTrim,
+  );
+  crtRearCap.position.set(0, 0.24, -0.255);
+  crtMonitorGroup.add(crtRearCap);
+
+  // Top ventilation louvers on CRT housing
+  for (let v = 0; v < 5; v++) {
+    const vent = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.28, 0.006, 0.014)),
+      matDarkMetal,
+    );
+    vent.position.set(0, 0.427, -0.05 + v * 0.028);
+    crtMonitorGroup.add(vent);
+  }
+
   const crtBezel = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.41, 0.31, 0.02)),
+    track(new THREE.BoxGeometry(0.405, 0.305, 0.022)),
     matDarkMetal,
   );
-  crtBezel.position.set(0, 0.235, 0.138);
+  crtBezel.position.set(0, 0.252, 0.145);
   crtMonitorGroup.add(crtBezel);
 
-  // 3D Live CanvasTexture CRT Screen (rendered inside monitor glass, NOT a 2D webpage!)
+  // Curved CRT Glass Screen Geometry (subtle parabolic CRT bulge)
+  const buildCurvedCrtPlane = (w: number, h: number, bulge: number) => {
+    const geo = track(new THREE.PlaneGeometry(w, h, 14, 10));
+    const pos = geo.attributes.position;
+    const hw = w * 0.5;
+    const hh = h * 0.5;
+    for (let i = 0; i < pos.count; i++) {
+      const u = pos.getX(i) / hw;
+      const v = pos.getY(i) / hh;
+      const curveZ = bulge * Math.max(0, 1 - u * u * 0.58 - v * v * 0.58);
+      pos.setZ(i, curveZ);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  };
+
+  // 3D Live CanvasTexture CRT Screen (rendered on curved glass inside bezel!)
   const crtCanvas = document.createElement('canvas');
   crtCanvas.width = 512;
   crtCanvas.height = 384;
@@ -1221,109 +1631,346 @@ export function attachChildhoodBedroomInteractions(
       map: crtCanvasTex,
       emissiveMap: crtCanvasTex,
       emissive: new THREE.Color('#FFFFFF'),
-      emissiveIntensity: 0.12,
-      roughness: 0.18,
-      metalness: 0.05,
+      emissiveIntensity: 0.16,
+      roughness: 0.14,
+      metalness: 0.06,
     }),
   );
   const crtScreenMesh = new THREE.Mesh(
-    track(new THREE.PlaneGeometry(0.37, 0.275)),
+    buildCurvedCrtPlane(0.368, 0.272, 0.014),
     crtScreenMat,
   );
-  crtScreenMesh.position.set(0, 0.235, 0.151);
+  crtScreenMesh.position.set(0, 0.252, 0.153);
   crtMonitorGroup.add(crtScreenMesh);
 
-  // Green CRT Power LED
+  // Subtle curved outer protective glass reflection highlight
+  const crtGlassOverlay = new THREE.Mesh(
+    buildCurvedCrtPlane(0.372, 0.276, 0.015),
+    track(
+      new THREE.MeshPhysicalMaterial({
+        color: '#DDE8E2',
+        roughness: 0.08,
+        metalness: 0.0,
+        transparent: true,
+        opacity: 0.1,
+        depthWrite: false,
+      }),
+    ),
+  );
+  crtGlassOverlay.position.set(0, 0.252, 0.156);
+  crtMonitorGroup.add(crtGlassOverlay);
+
+  // Physical CRT Power Button, Brightness/Contrast Knobs & Green Status LED
+  const crtPowerBtn = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.026, 0.016, 0.012)),
+    matBeigeTrim,
+  );
+  crtPowerBtn.position.set(0.185, 0.082, 0.15);
+  crtMonitorGroup.add(crtPowerBtn);
+
+  [0.095, 0.125].forEach((kx) => {
+    const knob = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.008, 0.008, 0.01, 10)),
+      matBeigeTrim,
+    );
+    knob.rotation.x = Math.PI / 2;
+    knob.position.set(kx, 0.082, 0.15);
+    crtMonitorGroup.add(knob);
+  });
+
   const crtPowerLedMat = track(
     new THREE.MeshStandardMaterial({
       color: '#2B5B34',
       emissive: new THREE.Color('#35E068'),
-      emissiveIntensity: 0.1,
+      emissiveIntensity: 0.14,
     }),
   );
   const crtPowerLed = new THREE.Mesh(
-    track(new THREE.SphereGeometry(0.008, 8, 8)),
+    track(new THREE.SphereGeometry(0.007, 8, 8)),
     crtPowerLedMat,
   );
-  crtPowerLed.position.set(0.16, 0.072, 0.145);
+  crtPowerLed.position.set(0.158, 0.082, 0.151);
   crtMonitorGroup.add(crtPowerLed);
 
-  // Beige Keyboard + Mouse on front of desk
+  // Subtle dynamic CRT phosphor bounce light casting soft glow onto desk wood & keyboard when booted
+  const crtBounceLight = new THREE.PointLight('#9AF0C2', 0, 2.2, 2.0);
+  crtBounceLight.position.set(0, 0.24, 0.26);
+  crtBounceLight.castShadow = false;
+  crtMonitorGroup.add(crtBounceLight);
+
+  // Sculpted Retro Beige Keyboard with Crisp Procedural Keycaps + Rubber Cable on Desk
+  const keyboardGroup = new THREE.Group();
+  keyboardGroup.position.set(0.12, 0.806, 0.21);
+  keyboardGroup.rotation.x = 0.08;
+  crtSetupGroup.add(keyboardGroup);
+
   const keyboardMesh = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.42, 0.025, 0.15)),
+    track(new THREE.BoxGeometry(0.43, 0.022, 0.155)),
     matBeigePlastic,
   );
-  keyboardMesh.position.set(0.12, 0.812, 0.2);
-  keyboardMesh.rotation.x = 0.08;
-  crtSetupGroup.add(keyboardMesh);
+  keyboardGroup.add(keyboardMesh);
 
-  const mousePad = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.16, 0.005, 0.15)),
-    track(new THREE.MeshStandardMaterial({ color: '#2F4D3F', roughness: 0.9 })),
+  // Raised keybed plate textured with crisp retro mechanical keycaps (F-row, QWERTY, arrows & numpad)
+  const keybedTop = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.405, 0.011, 0.132)),
+    track(
+      new THREE.MeshStandardMaterial({
+        map: bedroomMats?.retroKeycapTex ?? null,
+        color: bedroomMats?.retroKeycapTex ? '#FFFFFF' : '#CFC3AB',
+        roughness: 0.62,
+        metalness: 0.04,
+      }),
+    ),
   );
-  mousePad.position.set(0.46, 0.802, 0.2);
+  keybedTop.position.set(0, 0.014, 0.002);
+  keyboardGroup.add(keybedTop);
+
+  // Coiled keyboard cable routing cleanly behind desk
+  const kbCableCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.12, 0.81, 0.13),
+    new THREE.Vector3(0.18, 0.803, 0.06),
+    new THREE.Vector3(0.28, 0.802, -0.14),
+    new THREE.Vector3(0.38, 0.79, -0.35),
+  ]);
+  const kbCable = new THREE.Mesh(
+    track(new THREE.TubeGeometry(kbCableCurve, 18, 0.0042, 6, false)),
+    matCableRubber,
+  );
+  crtSetupGroup.add(kbCable);
+
+  // Mousepad + Sculpted Rounded Retro 2-Button Mouse + Cable flush on desktop
+  const mousePad = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.17, 0.005, 0.155)),
+    track(new THREE.MeshStandardMaterial({ color: '#2F4D3F', roughness: 0.92 })),
+  );
+  mousePad.position.set(0.46, 0.798, 0.2);
   crtSetupGroup.add(mousePad);
 
-  const mouseMesh = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.055, 0.025, 0.085)),
-    matBeigePlastic,
-  );
-  mouseMesh.position.set(0.46, 0.818, 0.2);
-  crtSetupGroup.add(mouseMesh);
+  const mouseGroup = new THREE.Group();
+  mouseGroup.position.set(0.46, 0.806, 0.2);
+  crtSetupGroup.add(mouseGroup);
 
-  // Beige CPU Tower resting on floor beside right leg of desk
+  const mouseBodyGeo = track(new THREE.SphereGeometry(0.042, 14, 10));
+  mouseBodyGeo.scale(0.68, 0.42, 1.08);
+  const mouseMesh = new THREE.Mesh(mouseBodyGeo, matBeigePlastic);
+  mouseMesh.position.y = 0.01;
+  mouseGroup.add(mouseMesh);
+
+  const mouseWheel = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.006, 0.006, 0.008, 8)),
+    matDarkMetal,
+  );
+  mouseWheel.rotation.z = Math.PI / 2;
+  mouseWheel.position.set(0, 0.025, -0.02);
+  mouseGroup.add(mouseWheel);
+
+  const mouseCableCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.46, 0.806, 0.155),
+    new THREE.Vector3(0.48, 0.802, 0.04),
+    new THREE.Vector3(0.44, 0.798, -0.18),
+    new THREE.Vector3(0.42, 0.785, -0.35),
+  ]);
+  const mouseCable = new THREE.Mesh(
+    track(new THREE.TubeGeometry(mouseCableCurve, 16, 0.0036, 6, false)),
+    matCableRubber,
+  );
+  crtSetupGroup.add(mouseCable);
+
+  // Beige Retro CPU Tower resting flush on oak floor beside right leg of desk + Subtle Status LEDs
+  const cpuGroup = new THREE.Group();
+  cpuGroup.position.set(0.46, 0.016, -0.08);
+  crtSetupGroup.add(cpuGroup);
+
   const cpuTower = new THREE.Mesh(
     track(new THREE.BoxGeometry(0.21, 0.44, 0.4)),
     matBeigePlastic,
   );
-  cpuTower.position.set(0.46, 0.22, -0.08);
-  crtSetupGroup.add(cpuTower);
+  cpuTower.position.y = 0.22;
+  cpuGroup.add(cpuTower);
+
+  const cpuFrontFace = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.195, 0.42, 0.016)),
+    matBeigeTrim,
+  );
+  cpuFrontFace.position.set(0, 0.22, 0.202);
+  cpuGroup.add(cpuFrontFace);
+
+  // CD-ROM Drive Bay + 3.5" Floppy Drive Slot + Vent Slats
+  const cdBay = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.155, 0.042, 0.012)),
+    matBeigePlastic,
+  );
+  cdBay.position.set(0, 0.375, 0.21);
+  cpuGroup.add(cdBay);
 
   const floppySlot = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.14, 0.018, 0.01)),
+    track(new THREE.BoxGeometry(0.135, 0.014, 0.01)),
     matDarkMetal,
   );
-  floppySlot.position.set(0.46, 0.34, 0.125);
-  crtSetupGroup.add(floppySlot);
+  floppySlot.position.set(0, 0.315, 0.212);
+  cpuGroup.add(floppySlot);
 
-  // Wired Headphones resting on front-left desk edge + Wearable Head Attachment
+  for (let i = 0; i < 4; i++) {
+    const grill = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.145, 0.008, 0.008)),
+      matDarkMetal,
+    );
+    grill.position.set(0, 0.075 + i * 0.022, 0.212);
+    cpuGroup.add(grill);
+  }
+
+  // CPU Power Button + Dual Subtle Status Lights (Green Power + Blinking Amber HDD)
+  const cpuPowerSwitch = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.014, 0.014, 0.012, 12)),
+    matBeigePlastic,
+  );
+  cpuPowerSwitch.rotation.x = Math.PI / 2;
+  cpuPowerSwitch.position.set(-0.048, 0.225, 0.211);
+  cpuGroup.add(cpuPowerSwitch);
+
+  const cpuPowerLedMat = track(
+    new THREE.MeshStandardMaterial({
+      color: '#2A5B32',
+      emissive: new THREE.Color('#42E874'),
+      emissiveIntensity: 0.3,
+    }),
+  );
+  const cpuPowerLed = new THREE.Mesh(
+    track(new THREE.SphereGeometry(0.0055, 8, 8)),
+    cpuPowerLedMat,
+  );
+  cpuPowerLed.position.set(0.028, 0.235, 0.213);
+  cpuGroup.add(cpuPowerLed);
+
+  const cpuHddLedMat = track(
+    new THREE.MeshStandardMaterial({
+      color: '#6E3C16',
+      emissive: new THREE.Color('#FF9D3B'),
+      emissiveIntensity: 0.15,
+    }),
+  );
+  const cpuHddLed = new THREE.Mesh(
+    track(new THREE.SphereGeometry(0.005, 8, 8)),
+    cpuHddLedMat,
+  );
+  cpuHddLed.position.set(0.052, 0.235, 0.213);
+  cpuGroup.add(cpuHddLed);
+
+  // Wired Studio Headphones with Cushioned Earcups & Visible Cable (seated flush on desk top at y = 0.7945)
   const headphonesDeskGroup = new THREE.Group();
   headphonesDeskGroup.name = 'wired_headphones_desk_prop';
-  headphonesDeskGroup.position.set(-0.34, 0.83, 0.18);
+  headphonesDeskGroup.position.set(-0.34, 0.838, 0.18);
   headphonesDeskGroup.rotation.y = 0.4;
   crtSetupGroup.add(headphonesDeskGroup);
 
-  const buildHeadphonesGeometry = (parent: THREE.Group, wearableScale: number) => {
+  const buildHeadphonesGeometry = (
+    parent: THREE.Group,
+    wearableScale: number,
+    includeShortCordTail: boolean,
+  ) => {
+    const s = wearableScale;
+    // Outer metal spring headband + padded leatherette inner cushion band
     const band = new THREE.Mesh(
-      track(new THREE.TorusGeometry(0.11 * wearableScale, 0.014 * wearableScale, 8, 18, Math.PI)),
+      track(new THREE.TorusGeometry(0.112 * s, 0.011 * s, 10, 24, Math.PI)),
       matDarkMetal,
     );
-    band.position.y = 0.02 * wearableScale;
+    band.position.y = 0.016 * s;
     parent.add(band);
-    [-0.11, 0.11].forEach((ex) => {
+
+    const bandPad = new THREE.Mesh(
+      track(new THREE.TorusGeometry(0.105 * s, 0.009 * s, 8, 20, Math.PI * 0.72)),
+      matHeadphoneCushion,
+    );
+    bandPad.position.y = 0.016 * s;
+    bandPad.rotation.z = Math.PI * 0.14;
+    parent.add(bandPad);
+
+    [-1, 1].forEach((side) => {
+      const ex = side * 0.112 * s;
+      // Brushed metal slider yoke
+      const yoke = new THREE.Mesh(
+        track(new THREE.BoxGeometry(0.008 * s, 0.032 * s, 0.016 * s)),
+        matAntiqueSilver,
+      );
+      yoke.position.set(ex, 0.016 * s, 0);
+      parent.add(yoke);
+
+      // Earcup outer shell + brushed brass accent ring
       const cup = new THREE.Mesh(
-        track(new THREE.CylinderGeometry(0.045 * wearableScale, 0.045 * wearableScale, 0.032 * wearableScale, 12)),
+        track(new THREE.CylinderGeometry(0.044 * s, 0.047 * s, 0.03 * s, 18)),
         matDarkMetal,
       );
       cup.rotation.z = Math.PI / 2;
-      cup.position.set(ex * wearableScale, 0.01 * wearableScale, 0);
+      cup.position.set(ex, -0.004 * s, 0);
       parent.add(cup);
+
+      const brassTrim = new THREE.Mesh(
+        track(new THREE.TorusGeometry(0.034 * s, 0.0038 * s, 8, 18)),
+        matChampagneGold,
+      );
+      brassTrim.rotation.y = Math.PI / 2;
+      brassTrim.position.set(ex + side * 0.0155 * s, -0.004 * s, 0);
+      parent.add(brassTrim);
+
+      // Plush cushioned leatherette earpad hugging the head
       const cushion = new THREE.Mesh(
-        track(new THREE.TorusGeometry(0.036 * wearableScale, 0.012 * wearableScale, 8, 14)),
-        matLeatherStrap,
+        track(new THREE.TorusGeometry(0.034 * s, 0.013 * s, 10, 18)),
+        matHeadphoneCushion,
       );
       cushion.rotation.y = Math.PI / 2;
-      cushion.position.set((ex > 0 ? ex - 0.016 : ex + 0.016) * wearableScale, 0.01 * wearableScale, 0);
+      cushion.position.set(ex - side * 0.017 * s, -0.004 * s, 0);
       parent.add(cushion);
     });
+
+    if (includeShortCordTail) {
+      // Draped visible headphone cable tail dropping neatly behind left shoulder when worn
+      const wornCordCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-0.114 * s, -0.028 * s, 0),
+        new THREE.Vector3(-0.125 * s, -0.095 * s, -0.015 * s),
+        new THREE.Vector3(-0.105 * s, -0.175 * s, -0.04 * s),
+      ]);
+      const wornCord = new THREE.Mesh(
+        track(new THREE.TubeGeometry(wornCordCurve, 12, 0.0034 * s, 6, false)),
+        matCableRubber,
+      );
+      parent.add(wornCord);
+    }
   };
-  buildHeadphonesGeometry(headphonesDeskGroup, 0.9);
+  buildHeadphonesGeometry(headphonesDeskGroup, 0.9, false);
   headphonesDeskGroup.rotation.x = Math.PI / 2;
+
+  // Visible curved 3D headphone cable resting flush on desk & terminating in a brass 3.5mm audio plug
+  const deskHeadphoneCableCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.27, 0.802, 0.14),
+    new THREE.Vector3(-0.18, 0.801, 0.06),
+    new THREE.Vector3(-0.08, 0.801, -0.08),
+    new THREE.Vector3(0.08, 0.8, -0.26),
+    new THREE.Vector3(0.32, 0.785, -0.35),
+  ]);
+  const deskHeadphoneCable = new THREE.Mesh(
+    track(new THREE.TubeGeometry(deskHeadphoneCableCurve, 22, 0.0044, 6, false)),
+    matCableRubber,
+  );
+  crtSetupGroup.add(deskHeadphoneCable);
+
+  const audioJackPlug = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.0055, 0.0045, 0.026, 8)),
+    matChampagneGold,
+  );
+  audioJackPlug.rotation.x = Math.PI / 2;
+  audioJackPlug.position.set(0.32, 0.785, -0.36);
+  deskHeadphoneCable.add(audioJackPlug);
 
   const wornHeadphonesGroup = new THREE.Group();
   wornHeadphonesGroup.name = 'worn_wired_headphones_prop';
   wornHeadphonesGroup.visible = false;
-  buildHeadphonesGeometry(wornHeadphonesGroup, 2.18);
+  buildHeadphonesGeometry(wornHeadphonesGroup, 2.15, true);
+  wornHeadphonesGroup.traverse((obj) => {
+    if ((obj as THREE.Mesh).isMesh) {
+      obj.castShadow = allowFlashlightShadows;
+      obj.receiveShadow = true;
+    }
+  });
 
   let headphonesWorn = false;
   let attachedHeadphonesParent: THREE.Object3D | null = null;
@@ -1759,38 +2406,105 @@ export function attachChildhoodBedroomInteractions(
     },
   });
 
-  // 2. School Bag resting beside study desk at (-4.28, 0, -5.08)
+  // 2. Structured Vintage Canvas School Bag resting flush on oak floor beside study desk
   const schoolBagGroup = new THREE.Group();
   schoolBagGroup.name = 'childhood_school_bag_group';
-  schoolBagGroup.position.set(-4.28, 0, -5.08);
+  schoolBagGroup.position.set(-4.28, 0.016, -5.08);
   schoolBagGroup.rotation.y = 0.52;
   studyCornerSpaceGroup.add(schoolBagGroup);
 
   const bagBody = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.34, 0.4, 0.19)),
+    track(new THREE.BoxGeometry(0.35, 0.39, 0.19)),
     matCanvasBag,
   );
-  bagBody.position.set(0, 0.2, 0);
-  bagBody.rotation.x = -0.1;
+  bagBody.position.set(0, 0.195, 0);
+  bagBody.rotation.x = -0.07;
   schoolBagGroup.add(bagBody);
 
+  // Leather reinforced bottom base + front utility pocket + peeking notebook inside
+  const bagBottom = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.358, 0.045, 0.198)),
+    matLeatherStrap,
+  );
+  bagBottom.position.set(0, 0.022, 0.012);
+  schoolBagGroup.add(bagBottom);
+
+  const bagFrontPocket = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.28, 0.17, 0.048)),
+    matCanvasBag,
+  );
+  bagFrontPocket.position.set(0, 0.145, 0.112);
+  bagFrontPocket.rotation.x = -0.07;
+  schoolBagGroup.add(bagFrontPocket);
+
+  // Brass corner rivets on canvas utility pocket for tactile vintage craft detail
+  [
+    [-0.12, 0.21],
+    [0.12, 0.21],
+    [-0.12, 0.08],
+    [0.12, 0.08],
+  ].forEach(([rx, ry]) => {
+    const rivet = new THREE.Mesh(
+      track(new THREE.CylinderGeometry(0.006, 0.006, 0.008, 8)),
+      matChampagneGold,
+    );
+    rivet.rotation.x = Math.PI / 2;
+    rivet.position.set(rx, ry, 0.138);
+    schoolBagGroup.add(rivet);
+  });
+
+  const peekingNotebook = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.18, 0.11, 0.024)),
+    track(new THREE.MeshStandardMaterial({ color: '#C66A4A', roughness: 0.78 })),
+  );
+  peekingNotebook.position.set(-0.04, 0.365, -0.01);
+  peekingNotebook.rotation.z = 0.09;
+  schoolBagGroup.add(peekingNotebook);
+
+  // Top leather carry handle + draped canvas shoulder strap
+  const carryHandle = new THREE.Mesh(
+    track(new THREE.TorusGeometry(0.056, 0.01, 8, 14, Math.PI)),
+    matLeatherStrap,
+  );
+  carryHandle.position.set(0, 0.39, -0.04);
+  schoolBagGroup.add(carryHandle);
+
+  const shoulderStrapCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.18, 0.32, 0),
+    new THREE.Vector3(-0.24, 0.18, 0.06),
+    new THREE.Vector3(-0.16, 0.02, 0.18),
+    new THREE.Vector3(0.04, 0.018, 0.22),
+  ]);
+  const shoulderStrap = new THREE.Mesh(
+    track(new THREE.TubeGeometry(shoulderStrapCurve, 16, 0.012, 6, false)),
+    matLeatherStrap,
+  );
+  schoolBagGroup.add(shoulderStrap);
+
   const bagFlapPivot = new THREE.Group();
-  bagFlapPivot.position.set(0, 0.39, -0.07);
+  bagFlapPivot.position.set(0, 0.385, -0.075);
   schoolBagGroup.add(bagFlapPivot);
 
   const bagFlap = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.35, 0.14, 0.2)),
+    track(new THREE.BoxGeometry(0.36, 0.145, 0.21)),
     matLeatherStrap,
   );
-  bagFlap.position.set(0, -0.05, 0.1);
+  bagFlap.position.set(0, -0.052, 0.105);
   bagFlapPivot.add(bagFlap);
 
-  [-0.09, 0.09].forEach((bx) => {
+  [-0.095, 0.095].forEach((bx) => {
+    const strap = new THREE.Mesh(
+      track(new THREE.BoxGeometry(0.026, 0.16, 0.012)),
+      matAgedLeather,
+    );
+    strap.position.set(bx, -0.055, 0.21);
+    bagFlapPivot.add(strap);
+
     const buckle = new THREE.Mesh(
-      track(new THREE.BoxGeometry(0.035, 0.04, 0.015)),
+      track(new THREE.BoxGeometry(0.036, 0.038, 0.016)),
       matChampagneGold,
     );
-    buckle.position.set(bx, -0.09, 0.2);
+    buckle.position.set(bx, -0.105, 0.214);
     bagFlapPivot.add(buckle);
   });
 
@@ -2300,7 +3014,13 @@ export function attachChildhoodBedroomInteractions(
   calTex.colorSpace = THREE.SRGBColorSpace;
   const calPlane = new THREE.Mesh(
     track(new THREE.PlaneGeometry(0.34, 0.36)),
-    track(new THREE.MeshBasicMaterial({ map: calTex })),
+    track(
+      new THREE.MeshStandardMaterial({
+        map: calTex,
+        roughness: 0.84,
+        metalness: 0.0,
+      }),
+    ),
   );
   calPlane.position.set(0, 0.98, 0.048);
   clockCalGroup.add(calPlane);
@@ -2352,15 +3072,16 @@ export function attachChildhoodBedroomInteractions(
     flashlightGroundGroup.visible = !held;
     mouthFlashlightGroup.visible = held;
     flashlightSpot.visible = held;
-    flashlightSpot.intensity = held ? 4.4 : 0;
-    flashlightSpot.castShadow = held && qualityConfig.enableShadows;
+    flashlightSpot.intensity = held ? 4.6 : 0;
+    flashlightSpot.castShadow = held && allowFlashlightShadows;
 
     if (held && headRig && attachedFlashlightParent !== headRig) {
       if (attachedFlashlightParent) {
         attachedFlashlightParent.remove(mouthFlashlightGroup);
       }
-      mouthFlashlightGroup.position.set(0, -0.075, 0.22);
-      mouthFlashlightGroup.rotation.set(0.08, 0, 0);
+      // Clean mouth attachment point on headMesh (sphere radius 0.22 facing +Z)
+      mouthFlashlightGroup.position.set(0, -0.068, 0.215);
+      mouthFlashlightGroup.rotation.set(0.06, 0, 0);
       headRig.add(mouthFlashlightGroup);
       attachedFlashlightParent = headRig;
     } else if (!held && attachedFlashlightParent) {
@@ -2379,13 +3100,14 @@ export function attachChildhoodBedroomInteractions(
     const next = typeof force === 'boolean' ? force : !headphonesWorn;
     headphonesWorn = next;
     headphonesDeskGroup.visible = !next;
+    deskHeadphoneCable.visible = !next;
     wornHeadphonesGroup.visible = next;
 
     if (next && headRig && attachedHeadphonesParent !== headRig) {
       if (attachedHeadphonesParent) {
         attachedHeadphonesParent.remove(wornHeadphonesGroup);
       }
-      wornHeadphonesGroup.position.set(0, 0.02, 0);
+      wornHeadphonesGroup.position.set(0, 0.015, 0);
       headRig.add(wornHeadphonesGroup);
       attachedHeadphonesParent = headRig;
     } else if (!next && attachedHeadphonesParent) {
@@ -2473,7 +3195,7 @@ export function attachChildhoodBedroomInteractions(
         flipLeafPivot.visible = false;
       }
 
-      // 2. Flashlight subtle dust mote drift when held
+      // 2. Flashlight & under-bed ambient dust mote drift
       if (flashlightHeld && flashlightDustPoints && flashlightDustPositions && !reducedMotion) {
         for (let i = 0; i < moteCount; i++) {
           flashlightDustPositions[i * 3 + 1] += Math.sin(elapsed * 1.4 + i) * dt * 0.018;
@@ -2482,6 +3204,15 @@ export function attachChildhoodBedroomInteractions(
           }
         }
         (flashlightDustPoints.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      }
+      if (underBedDustPoints && underBedDustPositions && !reducedMotion) {
+        for (let i = 0; i < underBedDustCount; i++) {
+          underBedDustPositions[i * 3] += Math.sin(elapsed * 0.7 + i * 1.3) * dt * 0.008;
+          underBedDustPositions[i * 3 + 1] += Math.cos(elapsed * 0.9 + i * 0.8) * dt * 0.006;
+          if (underBedDustPositions[i * 3 + 1] > 0.23) underBedDustPositions[i * 3 + 1] = 0.04;
+          if (underBedDustPositions[i * 3 + 1] < 0.035) underBedDustPositions[i * 3 + 1] = 0.21;
+        }
+        (underBedDustPoints.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
       }
 
       // 3. Bedside drawer smooth slide & keepsake lift
@@ -2514,7 +3245,13 @@ export function attachChildhoodBedroomInteractions(
         }
       }
 
-      // 7. CRT boot progress & active media canvas update (throttled ~15fps only while playing)
+      // 7. CRT boot progress, phosphor desk bounce glow, CPU subtle status LEDs & active media canvas update
+      const targetCrtBounce = crtState.poweredOn ? 0.38 + 0.08 * crtState.bootProgress : 0;
+      crtBounceLight.intensity += (targetCrtBounce - crtBounceLight.intensity) * Math.min(1, dt * 6);
+      cpuPowerLedMat.emissiveIntensity = crtState.poweredOn ? 1.35 : 0.25;
+      cpuHddLedMat.emissiveIntensity = crtState.poweredOn
+        ? 0.22 + (Math.sin(elapsed * 9.5) * 0.5 + 0.5) * (crtState.isPlaying || crtState.bootProgress < 1 ? 1.25 : 0.35)
+        : 0.08;
       if (crtState.poweredOn && crtState.bootProgress < 1) {
         crtState.bootProgress = Math.min(1, crtState.bootProgress + dt * (reducedMotion ? 8 : 1.25));
         crtRedrawDirty = true;
@@ -2599,8 +3336,15 @@ export function attachChildhoodBedroomInteractions(
 
     updateFlashlightAim(origin, forwardDir) {
       if (!flashlightHeld) return;
-      flashlightSpot.position.copy(origin);
-      tmpSpotlightTarget.copy(origin).addScaledVector(forwardDir, 4.5);
+      if (attachedFlashlightParent) {
+        mouthFlashlightGroup.updateMatrixWorld(true);
+        tmpFlashlightLensWorld.set(0, 0, 0.22);
+        mouthFlashlightGroup.localToWorld(tmpFlashlightLensWorld);
+        flashlightSpot.position.copy(tmpFlashlightLensWorld);
+      } else {
+        flashlightSpot.position.copy(origin).addScaledVector(forwardDir, 0.44);
+      }
+      tmpSpotlightTarget.copy(flashlightSpot.position).addScaledVector(forwardDir, 4.5);
       flashlightTargetObj.position.copy(tmpSpotlightTarget);
       flashlightTargetObj.updateMatrixWorld();
     },

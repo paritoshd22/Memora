@@ -65,7 +65,11 @@ import {
   CurationBatchItemInput,
   CurationBatchState,
 } from './types/curation';
-import { executeAutoCurationBatch } from './utils/curationPipeline';
+import {
+  executeAutoCurationBatch,
+  retrySaveMemoriesBatch,
+} from './utils/curationPipeline';
+import { ChildhoodMemoryAssistant } from './components/ChildhoodMemoryAssistant';
 
 // Code-split heavy secondary views & modals so initial desktop startup only parses the Atrium shell
 const MemoryDetailModal = lazy(() =>
@@ -517,11 +521,47 @@ export default function App() {
     [currentUser],
   );
 
-  // Verify session with backend on startup if a token is present
+  // Verify existing session or automatically establish a persistent curator session
+  // so uploaded memories save durably to the project disk vault across reloads & restarts.
   useEffect(() => {
-    if (!sessionToken) return;
     let cancelled = false;
+
+    const bootstrapGuestSession = async () => {
+      try {
+        const res = await fetch('/api/auth/guest', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok || !data?.user || !data?.sessionToken) return;
+        try {
+          localStorage.setItem(
+            AUTH_STORAGE_KEY,
+            JSON.stringify({
+              user: data.user,
+              sessionToken: data.sessionToken,
+            }),
+          );
+        } catch {
+          // ignore storage quota error
+        }
+        setCurrentUser(data.user);
+        setSessionToken(data.sessionToken);
+      } catch {
+        // stay offline-capable if backend is unreachable
+      }
+    };
+
+    if (!sessionToken) {
+      void bootstrapGuestSession();
+      return () => {
+        cancelled = true;
+      };
+    }
+
     fetch('/api/auth/me', {
+      credentials: 'same-origin',
       headers: {
         Authorization: `Bearer ${sessionToken}`,
       },
@@ -535,20 +575,13 @@ export default function App() {
       .then((data) => {
         if (cancelled || !data) return;
         if ('unauthorized' in data && data.unauthorized) {
-          // Session token was expired, revoked, or compromised — clear local auth and private state
           try {
             localStorage.removeItem(AUTH_STORAGE_KEY);
           } catch {
             // ignore
           }
-          setMemories([]);
-          setCollections([]);
-          setApprovedConnections([]);
-          setCustomMusicSources([]);
-          setSelectedMemoryId(null);
-          setActiveRoomId(null);
-          setCurrentUser(null);
-          setSessionToken(null);
+          // Re-establish a fresh persistent session instead of leaving the visitor unable to save
+          void bootstrapGuestSession();
           return;
         }
         if (data?.ok && data?.user) {
@@ -825,7 +858,9 @@ export default function App() {
           const needsHydration =
             mem.customImageUrl?.startsWith('idb://') ||
             mem.mediaUrl?.startsWith('idb://') ||
-            ((mem.id.startsWith('mem-upload-') || mem.id.startsWith('mem-auto-')) &&
+            ((mem.id.startsWith('mem-upload-') ||
+              mem.id.startsWith('mem-auto-') ||
+              mem.id.startsWith('mem-ch-')) &&
               (!mem.customImageUrl ||
                 mem.customImageUrl.startsWith('blob:') ||
                 !mem.mediaUrl ||
@@ -898,7 +933,21 @@ export default function App() {
       );
 
       if (cancelled) return;
-      setMemories(hydrated);
+      if (currentUser.isGuest) {
+        // Preserve starter museum exhibits alongside all persisted user-uploaded memories
+        if (hydrated.length > 0) {
+          setMemories((prev) => {
+            const byId = new Map<string, Memory>();
+            hydrated.forEach((hm) => byId.set(hm.id, hm));
+            prev.forEach((pm) => {
+              if (!byId.has(pm.id)) byId.set(pm.id, pm);
+            });
+            return Array.from(byId.values());
+          });
+        }
+      } else {
+        setMemories(hydrated);
+      }
       try {
         const lightweight = hydrated.map((m) => ({
           ...m,
@@ -1177,6 +1226,9 @@ export default function App() {
   const [curationBatchState, setCurationBatchState] =
     useState<CurationBatchState | null>(null);
   const lastBatchInputItemsRef = useRef<CurationBatchItemInput[] | null>(null);
+  const unsavedCurationMemoriesRef = useRef<Memory[]>([]);
+  const [lastAddedChildhoodMemory, setLastAddedChildhoodMemory] =
+    useState<Memory | null>(null);
 
   const recordReversibleSnapshot = useCallback(
     (summaryLabel: string) => {
@@ -1823,7 +1875,10 @@ export default function App() {
           updatedAt: nowIso,
         }) as Memory,
     );
-    setMemories((prev) => [...stampedMemories, ...prev]);
+    setMemories((prev) => {
+      const existingIds = new Set(stampedMemories.map((m) => m.id));
+      return [...stampedMemories, ...prev.filter((m) => !existingIds.has(m.id))];
+    });
     Promise.all(
       stampedMemories.map((mem) =>
         syncMemoryRecordToVault(
@@ -1834,21 +1889,61 @@ export default function App() {
       ),
     )
       .then((results) => {
-        const allSynced = results.every((r) => r.synced);
-        emitNotification(
-          'memory-added',
-          `${stampedMemories.length === 1 ? 'Memory Added' : `${stampedMemories.length} Memories Added`}`,
-          allSynced
-            ? 'Synchronised with your authenticated server vault and local archive.'
-            : 'Saved locally and queued for server synchronisation when online.',
-          'important',
-        );
+        const allSynced = results.every((r) => r.ok && r.synced);
+        if (allSynced) {
+          // Adopt server durable /api/storage/media/<id> URLs when returned
+          const serverMap = new Map<string, Record<string, unknown>>();
+          results.forEach((r) => {
+            if (r.savedMemory && typeof r.savedMemory.id === 'string') {
+              serverMap.set(r.savedMemory.id, r.savedMemory);
+            }
+          });
+          if (serverMap.size > 0) {
+            setMemories((prev) =>
+              prev.map((m) => {
+                const srv = serverMap.get(m.id);
+                if (!srv) return m;
+                return {
+                  ...m,
+                  mediaUrl:
+                    typeof srv.mediaUrl === 'string' ? srv.mediaUrl : m.mediaUrl,
+                  customImageUrl:
+                    typeof srv.customImageUrl === 'string'
+                      ? srv.customImageUrl
+                      : m.customImageUrl,
+                };
+              }),
+            );
+          }
+          const childhoodAdded = stampedMemories.find(
+            (m) => m.roomId === 'childhood',
+          );
+          if (childhoodAdded) {
+            setLastAddedChildhoodMemory(childhoodAdded);
+          }
+          emitNotification(
+            'memory-added',
+            'Memory added',
+            'Your memory has been saved to the project vault and added to the room.',
+            'important',
+          );
+        } else {
+          unsavedCurationMemoriesRef.current = stampedMemories;
+          emitNotification(
+            'memory-save-failed',
+            'Could not save — retry',
+            results[0]?.errorMessage ||
+              'Memory could not be persisted to project storage. Please retry saving.',
+            'important',
+          );
+        }
       })
       .catch(() => {
+        unsavedCurationMemoriesRef.current = stampedMemories;
         emitNotification(
-          'memory-added',
-          `${stampedMemories.length === 1 ? 'Memory Added' : `${stampedMemories.length} Memories Added`}`,
-          'Saved locally and queued for server synchronisation.',
+          'memory-save-failed',
+          'Could not save — retry',
+          'Memory could not be persisted to project storage. Please retry saving.',
           'important',
         );
       });
@@ -1862,12 +1957,13 @@ export default function App() {
     options?: { explicitLocalFallback?: boolean },
   ) => {
     lastBatchInputItemsRef.current = items;
+    unsavedCurationMemoriesRef.current = [];
     setCurationBatchState({
       batchId: `batch_${Date.now()}`,
-      phase: 'uploading',
+      phase: 'analysing',
       phaseLabel: options?.explicitLocalFallback
-        ? 'Preparing explicit local fallback…'
-        : 'Starting Gemini curation…',
+        ? 'Saving memory without AI…'
+        : 'Analyzing memory',
       totalCount: items.length,
       completedCount: 0,
       failedCount: 0,
@@ -1876,6 +1972,7 @@ export default function App() {
         fileName: it.fileName,
         detectedMediaType: it.detectedMediaType,
         status: 'queued',
+        saveStatus: 'pending',
         thumbnailUrl:
           it.detectedMediaType === 'image' ? it.originalDataUrl : undefined,
         inputSnapshot: it,
@@ -1898,8 +1995,19 @@ export default function App() {
           addedMemories,
           updatedCollections,
           addedConnections,
+          unsavedMemories,
         }) => {
-          setMemories((prev) => [...addedMemories, ...prev]);
+          unsavedCurationMemoriesRef.current = unsavedMemories || [];
+          if (addedMemories.length > 0) {
+            setMemories((prev) => {
+              const incomingIds = new Set(addedMemories.map((m) => m.id));
+              return [
+                ...addedMemories,
+                ...prev.filter((m) => !incomingIds.has(m.id)),
+              ];
+            });
+            setLastAddedChildhoodMemory(addedMemories[0]);
+          }
           setCollections(updatedCollections);
           if (addedConnections.length > 0) {
             setApprovedConnections((prev: MemoryConnection[]) => [
@@ -1925,6 +2033,76 @@ export default function App() {
     if (retryItems.length > 0) {
       handleStartAutoCuration(retryItems);
     }
+  };
+
+  const handleRetrySaveFailedMemories = async () => {
+    const pending = unsavedCurationMemoriesRef.current;
+    if (!pending || pending.length === 0 || !currentUser?.id) return;
+
+    setCurationBatchState((prev) =>
+      prev
+        ? {
+            ...prev,
+            phase: 'saving',
+            phaseLabel: 'Saving memory',
+            errorBannerMessage: undefined,
+          }
+        : prev,
+    );
+
+    const { saved, failed } = await retrySaveMemoriesBatch({
+      memories: pending,
+      userId: currentUser.id,
+      sessionToken,
+    });
+
+    unsavedCurationMemoriesRef.current = failed.map((f) => f.memory);
+
+    if (saved.length > 0) {
+      setMemories((prev) => {
+        const savedIds = new Set(saved.map((m) => m.id));
+        return [...saved, ...prev.filter((m) => !savedIds.has(m.id))];
+      });
+      setLastAddedChildhoodMemory(saved[0]);
+    }
+
+    setCurationBatchState((prev) => {
+      if (!prev) return prev;
+      const savedIdSet = new Set(saved.map((m) => m.id));
+      const failedMap = new Map(failed.map((f) => [f.memory.id, f.error]));
+      const nextItems = prev.items.map((it) => {
+        if (it.memoryId && savedIdSet.has(it.memoryId)) {
+          return {
+            ...it,
+            saveStatus: 'saved' as const,
+            saveError: undefined,
+            placementApproved: true,
+          };
+        }
+        if (it.memoryId && failedMap.has(it.memoryId)) {
+          return {
+            ...it,
+            saveStatus: 'failed' as const,
+            saveError: failedMap.get(it.memoryId),
+          };
+        }
+        return it;
+      });
+      const stillFailed = failed.length > 0;
+      return {
+        ...prev,
+        phase: stillFailed ? 'save_failed' : 'ready',
+        phaseLabel: stillFailed ? 'Could not save — retry' : 'Memory added',
+        completedCount: nextItems.filter((i) => i.saveStatus === 'saved').length,
+        failedCount: nextItems.filter(
+          (i) => i.status === 'failed' || i.saveStatus === 'failed',
+        ).length,
+        errorBannerMessage: stillFailed
+          ? failed[0]?.error || 'Could not save — retry'
+          : undefined,
+        items: nextItems,
+      };
+    });
   };
 
   const handleSaveFailedWithLocalFallback = () => {
@@ -3322,11 +3500,42 @@ export default function App() {
           setActiveNav('collections');
         }}
         onRetryFailed={handleRetryFailedCuration}
+        onRetrySaveFailed={() => {
+          void handleRetrySaveFailedMemories();
+        }}
         onSaveWithLocalFallback={handleSaveFailedWithLocalFallback}
         onUndoLastBatch={handleUndoCurationBatch}
         onApproveItemPlacement={handleApproveItemPlacement}
         onApproveAllPlacements={handleApproveAllPlacements}
         onEnterChildhoodPark={() => handleEnterRoom('childhood')}
+      />
+
+      <ChildhoodMemoryAssistant
+        visible={
+          activeRoomId === 'childhood' &&
+          hasEnteredAtrium &&
+          activeNav === 'home' &&
+          !isAddMemoryOpen &&
+          !isFeatureWallModalOpen
+        }
+        childhoodMemories={memories.filter((m) => m.roomId === 'childhood')}
+        selectedMemory={
+          selectedMemoryId
+            ? memories.find((m) => m.id === selectedMemoryId) || null
+            : null
+        }
+        lastAddedMemory={lastAddedChildhoodMemory}
+        userId={currentUser?.id}
+        sessionToken={sessionToken}
+        onStartQuickUpload={(items) => handleStartAutoCuration(items)}
+        onOpenFullUploadModal={() => {
+          setAddMemoryDefaultRoomId('childhood');
+          setIsAddMemoryOpen(true);
+        }}
+        onSelectMemoryById={(memId) => setSelectedMemoryId(memId)}
+        onMemoryUpdatedFromAssistant={(updatedMem) => {
+          handleUpdateMemory(updatedMem);
+        }}
       />
 
       <ResetMuseumConfirmModal

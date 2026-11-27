@@ -72,10 +72,28 @@ export class AuthService {
   };
 
   constructor(storeFilePath?: string) {
+    const projectDefaultPath = path.resolve(
+      process.cwd(),
+      'data',
+      'memora-auth-sessions.json',
+    );
     this.storePath =
       storeFilePath ||
       process.env.MEMORA_AUTH_STORE_PATH ||
-      path.join(os.tmpdir(), 'memora-auth-sessions.json');
+      projectDefaultPath;
+
+    if (!storeFilePath && !process.env.MEMORA_AUTH_STORE_PATH && !fs.existsSync(this.storePath)) {
+      const legacyPath = path.join(os.tmpdir(), 'memora-auth-sessions.json');
+      if (fs.existsSync(legacyPath)) {
+        try {
+          fs.mkdirSync(path.dirname(this.storePath), { recursive: true });
+          fs.copyFileSync(legacyPath, this.storePath);
+        } catch {
+          // ignore migration failure
+        }
+      }
+    }
+
     this.loadFromDisk();
   }
 

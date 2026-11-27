@@ -32,7 +32,18 @@ export interface RunCurationBatchCallbacks {
     updatedCollections: Collection[];
     addedConnections: MemoryConnection[];
     undoSnapshot: CurationUndoSnapshot;
+    unsavedMemories?: Memory[];
   }) => void;
+}
+
+function stableMemoryIdForInput(item: CurationBatchItemInput, orderIndex: number): string {
+  const safeTemp = (item.tempId || '')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 48);
+  if (safeTemp.length >= 6) {
+    return `mem-ch-${safeTemp}`;
+  }
+  return `mem-auto-${Date.now()}-${orderIndex}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function buildMemoryFromAnalyzedItem(params: {
@@ -41,9 +52,18 @@ function buildMemoryFromAnalyzedItem(params: {
   ownerId: string;
   orderIndex: number;
   awaitingApproval?: boolean;
+  explicitLocalFallback?: boolean;
 }): Memory {
-  const { item, analysisRes, ownerId, orderIndex, awaitingApproval = true } = params;
-  const memId = `mem-auto-${Date.now()}-${orderIndex}-${Math.random().toString(36).slice(2, 6)}`;
+  const {
+    item,
+    analysisRes,
+    ownerId,
+    orderIndex,
+    awaitingApproval = false,
+    explicitLocalFallback = false,
+  } = params;
+
+  const memId = stableMemoryIdForInput(item, orderIndex);
   const report =
     analysisRes?.report ||
     buildGroundedFallbackReport({
@@ -63,8 +83,12 @@ function buildMemoryFromAnalyzedItem(params: {
       ? parseChatExportText(item.rawTextContent, item.fileName)
       : undefined;
 
+  const userTitle = (item.userTitle || '').trim();
+  const userDescription = (item.userDescription || '').trim();
+  const userDate = (item.userDate || '').trim();
+
   const userOrSuggestedDate =
-    (item.userDate || '').trim() || (analysisRes?.suggestedDate || '').trim();
+    userDate || (analysisRes?.suggestedDate || '').trim();
   const yearMatch = userOrSuggestedDate.match(/(\d{4})/);
   const explicitDateMatch = (report.explicitDates?.[0] || '').match(/(\d{4})/);
   const yearNum = yearMatch
@@ -73,9 +97,18 @@ function buildMemoryFromAnalyzedItem(params: {
       ? Number(explicitDateMatch[1])
       : new Date().getFullYear();
 
+  const aiTitle =
+    (analysisRes?.aiGeneratedTitle || analysisRes?.suggestedTitle || '').trim();
+  const aiDescription =
+    (
+      analysisRes?.aiGeneratedDescription ||
+      analysisRes?.suggestedDescription ||
+      ''
+    ).trim();
+
   const mediaTitle =
-    (item.userTitle || '').trim() ||
-    (analysisRes?.suggestedTitle || '').trim() ||
+    userTitle ||
+    aiTitle ||
     item.fileName.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
     'Uploaded Memory';
 
@@ -96,12 +129,22 @@ function buildMemoryFromAnalyzedItem(params: {
     blueprint.linkedObjectId = placement.catalogEntry.linkedObjectId;
   }
 
+  const aiAssistantResponse =
+    (analysisRes?.assistantResponse || report.assistantResponse || '').trim() ||
+    `Your memory "${mediaTitle}" has been placed in the ${placement.catalogEntry.label}.`;
+
+  const suggestedTags = Array.isArray(analysisRes?.suggestedTags)
+    ? analysisRes.suggestedTags
+    : [item.detectedMediaType, placement.locationId];
+
+  const nowIso = new Date().toISOString();
+
   return {
     id: memId,
     ownerId,
     roomId: 'childhood',
     title: mediaTitle,
-    subtitle: `${placement.catalogEntry.label}`,
+    subtitle: placement.catalogEntry.label,
     type: item.detectedMediaType,
     mediaType: item.detectedMediaType,
     mediaUrl,
@@ -124,15 +167,16 @@ function buildMemoryFromAnalyzedItem(params: {
           ? 'Audio'
           : item.detectedMediaType === 'chat'
             ? 'Chat Archive'
-            : item.detectedMediaType === 'document' || item.detectedMediaType === 'certificate'
+            : item.detectedMediaType === 'document' ||
+                item.detectedMediaType === 'certificate'
               ? 'Document'
               : item.detectedMediaType === 'story'
                 ? 'Story'
                 : 'Photo',
     description:
-      (item.userDescription || '').trim() ||
-      (analysisRes?.suggestedDescription || '').trim() ||
-      `Original ${item.detectedMediaType} preserved automatically in MEMORA.`,
+      userDescription ||
+      aiDescription ||
+      `Original ${item.detectedMediaType} preserved in MEMORA.`,
     story:
       (analysisRes?.suggestedStory || '').trim() ||
       (item.detectedMediaType === 'story' || item.detectedMediaType === 'document'
@@ -160,29 +204,58 @@ function buildMemoryFromAnalyzedItem(params: {
     accessionNumber: `ACC.${yearNum}.${memId.slice(-4).toUpperCase()}`,
     motif: 'treehouse_meadow',
     palette: ['#F4D8AF', '#D38B52', '#442D1C', '#D6A15D'],
-    tags: Array.isArray(analysisRes?.suggestedTags)
-      ? analysisRes.suggestedTags
-      : [item.detectedMediaType, placement.locationId],
+    tags: suggestedTags,
     aiSummary: report.recommendedReason,
+    assistantNote: aiAssistantResponse,
     placementTarget: placement.catalogEntry.placementTarget,
     curatedZoneId: placement.locationId,
-    // Keep hidden in 3D until the visitor approves placement in the review step
+    // Immediately display in the 3D Childhood Room unless explicitly held for approval
     hiddenFrom3D: awaitingApproval,
     curationReport: report,
     memoryTo3DBlueprint: blueprint,
     linkedSpaceId: placement.catalogEntry.spaceId,
     linkedObjectId: placement.catalogEntry.linkedObjectId,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    linked3DObject: placement.catalogEntry.label,
+    userProvided: {
+      title: userTitle || undefined,
+      description: userDescription || undefined,
+      date: userDate || undefined,
+    },
+    aiSuggestions:
+      analysisRes?.analyzedBy === 'gemini'
+        ? {
+            title: aiTitle || undefined,
+            description: aiDescription || undefined,
+            tags: suggestedTags,
+            locationId: placement.locationId,
+            assistantResponse: aiAssistantResponse,
+            modelUsed: analysisRes?.modelUsed || report.modelUsed,
+            generatedAt: nowIso,
+          }
+        : undefined,
+    confirmationStatus: explicitLocalFallback ? 'manual_no_ai' : 'auto_placed',
+    placement3D: {
+      locationId: placement.locationId,
+      placementTarget: placement.catalogEntry.placementTarget,
+      linkedObjectId: placement.catalogEntry.linkedObjectId,
+      position: [
+        placement.catalogEntry.anchor.x,
+        placement.catalogEntry.anchor.y,
+        placement.catalogEntry.anchor.z,
+      ],
+    },
+    createdAt: nowIso,
+    updatedAt: nowIso,
   };
 }
 
 /**
- * Runs non-blocking automatic background curation across all uploaded items.
- * Preserves original uploaded files in IndexedDB immediately before any AI call,
- * calls the live server-side Gemini endpoint (/api/curation/analyze-item),
- * never silently substitutes demo/fallback output for Gemini, and pauses at the
- * interactive Placement Review step so only user-approved placements enter 3D.
+ * Automatic Childhood Room AI Memory Pipeline:
+ * 1. "Analyzing memory" — runs live Gemini analysis on the uploaded image & text (or explicit manual save without AI).
+ * 2. Prepares 3D placement & Childhood Room location automatically.
+ * 3. "Saving memory" — writes original media + structured record to persistent project disk vault + IndexedDB.
+ * 4. "Memory added" — ONLY emitted once persistence is confirmed (`ok: true`); displays immediately in the 3D room.
+ * 5. "Could not save — retry" — emitted if persistence fails, keeping the exact same stable ID so retry creates zero duplicates.
  */
 export async function executeAutoCurationBatch(params: {
   items: CurationBatchItemInput[];
@@ -211,17 +284,22 @@ export async function executeAutoCurationBatch(params: {
     fileName: it.fileName,
     detectedMediaType: it.detectedMediaType,
     status: 'queued',
+    saveStatus: 'pending',
     thumbnailUrl: it.detectedMediaType === 'image' ? it.originalDataUrl : undefined,
     inputSnapshot: it,
   }));
 
   const emitState = (partial: Partial<CurationBatchState>): CurationBatchState => {
-    const completedCount = itemStatuses.filter((s) => s.status === 'done').length;
-    const failedCount = itemStatuses.filter((s) => s.status === 'failed').length;
+    const completedCount = itemStatuses.filter(
+      (s) => s.status === 'done' && s.saveStatus === 'saved',
+    ).length;
+    const failedCount = itemStatuses.filter(
+      (s) => s.status === 'failed' || s.saveStatus === 'failed',
+    ).length;
     const nextState: CurationBatchState = {
       batchId,
-      phase: 'uploading',
-      phaseLabel: 'Uploading',
+      phase: 'analysing',
+      phaseLabel: 'Analyzing memory',
       totalCount: itemStatuses.length,
       completedCount,
       failedCount,
@@ -232,7 +310,12 @@ export async function executeAutoCurationBatch(params: {
     return nextState;
   };
 
-  emitState({ phase: 'uploading', phaseLabel: 'Uploading memories securely…' });
+  emitState({
+    phase: 'analysing',
+    phaseLabel: explicitLocalFallback
+      ? 'Saving memory without AI…'
+      : 'Analyzing memory',
+  });
 
   const undoSnapshot: CurationUndoSnapshot = {
     batchId,
@@ -245,48 +328,21 @@ export async function executeAutoCurationBatch(params: {
     summaryLabel: `${items.length} uploaded memor${items.length === 1 ? 'y' : 'ies'}`,
   };
 
-  const addedMemories: Memory[] = [];
-  const existingFileNames = new Set(
-    existingMemories
-      .map((m) => (m.mediaFileName || '').trim().toLowerCase())
-      .filter(Boolean),
-  );
-
-  // Stage 2: Preserve originals safely before analysis
-  emitState({
-    phase: 'preserving_original',
-    phaseLabel: 'Preserving original media untouched…',
-  });
-
-  // Stage 3: Live Gemini analysis (or explicit user-requested local fallback)
-  emitState({
-    phase: 'analysing',
-    phaseLabel: explicitLocalFallback
-      ? 'Preparing explicit local fallback (Non-Gemini)…'
-      : 'Analysing with Gemini…',
-  });
+  const preparedMemories: Memory[] = [];
+  const existingIds = new Set(existingMemories.map((m) => m.id));
 
   for (let idx = 0; idx < items.length; idx++) {
     const item = items[idx];
-    const normalizedFileName = (item.fileName || '').trim().toLowerCase();
-
-    // Prevent duplicate memory creation if already in archive or batch
-    if (
-      normalizedFileName &&
-      item.captureSource === 'upload' &&
-      existingFileNames.has(normalizedFileName)
-    ) {
-      itemStatuses[idx].status = 'failed';
-      itemStatuses[idx].errorMessage = `"${item.fileName}" is already in your MEMORA archive (duplicate skipped).`;
-      continue;
-    }
+    const stableId = stableMemoryIdForInput(item, idx);
 
     itemStatuses[idx].status = 'processing';
     emitState({
       phase: 'analysing',
       phaseLabel: explicitLocalFallback
-        ? `Preparing local fallback (${idx + 1}/${items.length}): ${item.fileName}`
-        : `Analysing with Gemini (${idx + 1}/${items.length}): ${item.fileName}`,
+        ? `Preparing manual save (${idx + 1}/${items.length})`
+        : items.length === 1
+          ? 'Analyzing memory'
+          : `Analyzing memory (${idx + 1}/${items.length})`,
     });
 
     try {
@@ -300,18 +356,16 @@ export async function executeAutoCurationBatch(params: {
           videoDurationSeconds: item.videoDurationSeconds,
         });
         fallbackReport.analyzedBy = 'deterministic_fallback';
-        fallbackReport.confidenceScore = 0.48;
-        fallbackReport.recommendedLocationId = 'keepsake_corner';
-        fallbackReport.recommendedReason =
-          'Saved via explicit Local Fallback (Non-Gemini). Please choose your preferred Childhood Park location below.';
+        fallbackReport.assistantResponse =
+          'Saved manually without AI analysis. Your original image is preserved in the Childhood Room.';
         json = {
           ok: true,
           analyzedBy: 'deterministic_fallback',
-          isDemo: true,
-          isUnsorted: true,
-          confidenceScore: 0.48,
+          isDemo: false,
+          isUnsorted: false,
+          confidenceScore: fallbackReport.confidenceScore ?? 0.65,
           warnings: [
-            'Analyzed locally without Gemini (explicit fallback). Original media is preserved untouched.',
+            'Saved manually without Gemini AI details. Original media is preserved untouched.',
           ],
           suggestedTitle:
             (item.userTitle || '').trim() ||
@@ -319,8 +373,9 @@ export async function executeAutoCurationBatch(params: {
             'Uploaded Memory',
           suggestedDescription:
             (item.userDescription || '').trim() ||
-            `Original ${item.detectedMediaType} preserved locally without Gemini AI.`,
+            `Original ${item.detectedMediaType} saved manually to your Childhood Room.`,
           suggestedDate: (item.userDate || '').trim(),
+          assistantResponse: fallbackReport.assistantResponse,
           report: fallbackReport,
         };
       } else {
@@ -338,7 +393,7 @@ export async function executeAutoCurationBatch(params: {
           itemStatuses[idx].status = 'failed';
           const codeTag = json?.code ? `[${json.code}] ` : '';
           itemStatuses[idx].errorMessage =
-            `${codeTag}${json?.message || 'Live Gemini analysis did not complete. Your original file is preserved for retry.'}`;
+            `${codeTag}${json?.message || 'Gemini analysis is currently unavailable. Your uploaded image is preserved — retry or save manually without AI.'}`;
           continue;
         }
       }
@@ -348,10 +403,16 @@ export async function executeAutoCurationBatch(params: {
         analysisRes: json,
         ownerId: userId,
         orderIndex: idx,
-        awaitingApproval: true,
+        awaitingApproval: false,
+        explicitLocalFallback,
       });
 
-      // Immediately store untouched original media in IndexedDB (never large binaries in localStorage)
+      // Keep stable ID consistent if this exact upload tempId already exists
+      if (existingIds.has(stableId)) {
+        mem.id = stableId;
+      }
+
+      // Immediately store untouched original media in IndexedDB
       if (item.originalDataUrl) {
         const domain =
           item.detectedMediaType === 'video'
@@ -366,14 +427,10 @@ export async function executeAutoCurationBatch(params: {
         );
       }
 
-      if (normalizedFileName) {
-        existingFileNames.add(normalizedFileName);
-      }
-      addedMemories.push(mem);
-      undoSnapshot.createdMemoryIds.push(mem.id);
+      preparedMemories.push(mem);
 
       const zoneId: ChildhoodWorldLocationId =
-        mem.curatedZoneId || 'keepsake_corner';
+        mem.curatedZoneId || 'memory_wall';
       itemStatuses[idx].status = 'done';
       itemStatuses[idx].memoryId = mem.id;
       itemStatuses[idx].locationId = zoneId;
@@ -382,7 +439,9 @@ export async function executeAutoCurationBatch(params: {
       itemStatuses[idx].suggestedTitle = mem.title;
       itemStatuses[idx].suggestedDescription = mem.description;
       itemStatuses[idx].suggestedDate = mem.date;
+      itemStatuses[idx].suggestedTags = mem.tags;
       itemStatuses[idx].recommendedReason = mem.curationReport?.recommendedReason;
+      itemStatuses[idx].assistantResponse = mem.assistantNote;
       itemStatuses[idx].confidenceScore =
         typeof json?.confidenceScore === 'number'
           ? json.confidenceScore
@@ -393,31 +452,94 @@ export async function executeAutoCurationBatch(params: {
       itemStatuses[idx].isDemo = Boolean(json?.isDemo);
       itemStatuses[idx].isUnsorted = Boolean(json?.isUnsorted);
       itemStatuses[idx].warnings = Array.isArray(json?.warnings) ? json.warnings : [];
-      itemStatuses[idx].placementApproved = false;
+      itemStatuses[idx].placementApproved = true;
     } catch (err: any) {
       itemStatuses[idx].status = 'failed';
       itemStatuses[idx].errorMessage =
-        String(err?.message || 'Network interruption during analysis.');
+        String(err?.message || 'Network interruption during Gemini analysis.');
     }
   }
 
-  if (addedMemories.length === 0) {
+  if (preparedMemories.length === 0) {
     return emitState({
       phase: 'error',
-      phaseLabel: 'Gemini analysis unavailable — originals preserved for retry',
+      phaseLabel: 'Gemini unavailable — save manually or retry',
       errorBannerMessage:
         itemStatuses[0]?.errorMessage ||
-        'Gemini could not analyse the uploaded items right now. Click Retry, or choose Save with Local Fallback (Non-Gemini).',
+        'Gemini could not analyze the uploaded memory right now. Your uploaded image is preserved — click Retry with Gemini or Save Manually (No AI).',
     });
   }
 
-  // Stage 4: Organising into evidence-backed collections
+  // Stage 2: Persist to project server disk vault BEFORE confirming "Memory added"
   emitState({
-    phase: 'organising',
-    phaseLabel: 'Organising…',
+    phase: 'saving',
+    phaseLabel: 'Saving memory',
   });
 
-  const combinedMemories = [...addedMemories, ...existingMemories];
+  const savedMemories: Memory[] = [];
+  const unsavedMemories: Memory[] = [];
+
+  for (const mem of preparedMemories) {
+    const st = itemStatuses.find((s) => s.memoryId === mem.id);
+    if (st) st.saveStatus = 'saving';
+
+    const syncRes = await syncMemoryRecordToVault(
+      { ...mem, userId },
+      userId,
+      sessionToken,
+    );
+
+    if (syncRes.ok && syncRes.synced) {
+      // Adopt durable /api/storage/media/<id> URL returned by server while keeping local cache intact
+      const serverMem = syncRes.savedMemory;
+      if (serverMem && typeof serverMem.mediaUrl === 'string') {
+        mem.mediaUrl = serverMem.mediaUrl;
+      }
+      if (serverMem && typeof serverMem.customImageUrl === 'string') {
+        mem.customImageUrl = serverMem.customImageUrl;
+      }
+      savedMemories.push(mem);
+      undoSnapshot.createdMemoryIds.push(mem.id);
+      if (st) {
+        st.saveStatus = 'saved';
+        st.saveError = undefined;
+      }
+    } else {
+      unsavedMemories.push(mem);
+      if (st) {
+        st.saveStatus = 'failed';
+        st.saveError =
+          syncRes.errorMessage || 'Could not persist memory to project storage.';
+      }
+    }
+  }
+
+  // If NONE of the memories saved to persistent storage, honestly report "Could not save — retry"
+  if (savedMemories.length === 0) {
+    callbacks.onMemoriesAndCollectionsReady({
+      addedMemories: [],
+      updatedCollections: existingCollections,
+      addedConnections: [],
+      undoSnapshot,
+      unsavedMemories,
+    });
+
+    return emitState({
+      phase: 'save_failed',
+      phaseLabel: 'Could not save — retry',
+      errorBannerMessage:
+        itemStatuses.find((s) => s.saveStatus === 'failed')?.saveError ||
+        'Could not save your memory to project storage. Click Retry Save to try again without creating duplicates.',
+    });
+  }
+
+  // Stage 3: Organize collections & connections in background for confirmed saved memories
+  const combinedMemories = [
+    ...savedMemories,
+    ...existingMemories.filter(
+      (em) => !savedMemories.some((sm) => sm.id === em.id),
+    ),
+  ];
   let updatedCollections = existingCollections;
   let addedConnections: MemoryConnection[] = [];
 
@@ -426,18 +548,12 @@ export async function executeAutoCurationBatch(params: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        newMemories: addedMemories,
+        newMemories: savedMemories,
         allMemories: combinedMemories,
         existingCollections,
       }),
     });
-    const orgJson = await orgResp.json();
-
-    // Stage 5: Finding related memories
-    emitState({
-      phase: 'finding_related',
-      phaseLabel: 'Finding related memories…',
-    });
+    const orgJson = await orgResp.json().catch(() => null);
 
     if (orgJson?.ok && Array.isArray(orgJson.collections)) {
       updatedCollections = orgJson.collections;
@@ -445,37 +561,6 @@ export async function executeAutoCurationBatch(params: {
       undoSnapshot.createdCollectionIds = updatedCollections
         .filter((c) => !existingColIds.has(c.id))
         .map((c) => c.id);
-
-      // Stage 6: Suggesting museum locations
-      emitState({
-        phase: 'assigning_locations',
-        phaseLabel: 'Suggesting Childhood Park locations…',
-      });
-
-      if (Array.isArray(orgJson.placements)) {
-        const placementByMem = new Map<string, string>(
-          orgJson.placements.map((p: any) => [p.memoryId, p.locationId]),
-        );
-        for (const mem of addedMemories) {
-          const proposedLoc = placementByMem.get(mem.id);
-          if (proposedLoc) {
-            const validated = validateLocationPlacement(
-              proposedLoc,
-              mem.type || mem.mediaType || 'image',
-            );
-            mem.curatedZoneId = validated.locationId;
-            mem.placementTarget = validated.catalogEntry.placementTarget;
-            mem.linkedSpaceId = validated.catalogEntry.spaceId;
-            mem.linkedObjectId = validated.catalogEntry.linkedObjectId;
-            mem.subtitle = validated.catalogEntry.label;
-            const st = itemStatuses.find((s) => s.memoryId === mem.id);
-            if (st) {
-              st.locationId = validated.locationId;
-              st.locationLabel = validated.catalogEntry.label;
-            }
-          }
-        }
-      }
 
       if (Array.isArray(orgJson.connections)) {
         const existingPairKeys = new Set(
@@ -505,7 +590,7 @@ export async function executeAutoCurationBatch(params: {
     });
   }
 
-  for (const mem of addedMemories) {
+  for (const mem of savedMemories) {
     const matchingCols = updatedCollections.filter((c) =>
       c.memoryIds.includes(mem.id),
     );
@@ -514,14 +599,6 @@ export async function executeAutoCurationBatch(params: {
     if (st && matchingCols.length > 0) {
       st.collectionTitle = matchingCols[0].title;
     }
-  }
-
-  for (const mem of addedMemories) {
-    await syncMemoryRecordToVault(
-      { ...mem, userId },
-      userId,
-      sessionToken,
-    ).catch(() => {});
   }
 
   const mergedConnections = [...addedConnections, ...existingConnections];
@@ -533,32 +610,96 @@ export async function executeAutoCurationBatch(params: {
     sessionToken,
   ).catch(() => {});
 
-  // Commit draft memories (hiddenFrom3D: true until user approves in Placement Review)
+  // Commit confirmed saved memories immediately into the Childhood Room 3D display
   callbacks.onMemoriesAndCollectionsReady({
-    addedMemories,
+    addedMemories: savedMemories,
     updatedCollections,
     addedConnections,
     undoSnapshot,
+    unsavedMemories: unsavedMemories.length > 0 ? unsavedMemories : undefined,
   });
 
   const primaryCol =
     updatedCollections.find((c) =>
-      addedMemories.some((m) => c.memoryIds.includes(m.id)),
+      savedMemories.some((m) => c.memoryIds.includes(m.id)),
     ) || updatedCollections[0];
 
-  const hasFailures = itemStatuses.some((s) => s.status === 'failed');
+  const hasSaveFailures = unsavedMemories.length > 0;
+  const hasAnalysisFailures = itemStatuses.some((s) => s.status === 'failed');
 
-  // Stage 7: Interactive Placement Review — user edits/approves before 3D display becomes permanent
+  const firstAssistantMsg = savedMemories[0]?.assistantNote;
+  const assistantSummary =
+    savedMemories.length === 1
+      ? `Your memory has been added to the room. ${firstAssistantMsg || ''}`.trim()
+      : `${savedMemories.length} memories have been added to the Childhood Room.`;
+
+  if (hasSaveFailures) {
+    return emitState({
+      phase: 'save_failed',
+      phaseLabel: 'Could not save — retry',
+      primaryReadyCollectionId: primaryCol?.id,
+      primaryReadyCollectionTitle: primaryCol?.title,
+      assistantSummary,
+      errorBannerMessage: `${unsavedMemories.length} memor${unsavedMemories.length === 1 ? 'y' : 'ies'} could not be saved. Click Retry Save to save without duplicates.`,
+      lastUndoSnapshot: undoSnapshot,
+    });
+  }
+
   return emitState({
-    phase: 'review',
-    phaseLabel: hasFailures
-      ? 'Review placements — failed items kept ready to retry'
-      : 'Review & approve 3D Childhood Park placement',
+    phase: 'ready',
+    phaseLabel: 'Memory added',
     primaryReadyCollectionId: primaryCol?.id,
     primaryReadyCollectionTitle: primaryCol?.title,
-    errorBannerMessage: hasFailures
-      ? `${itemStatuses.filter((s) => s.status === 'failed').length} item(s) could not be analysed. Original files remain preserved for Retry.`
+    assistantSummary,
+    errorBannerMessage: hasAnalysisFailures
+      ? `${itemStatuses.filter((s) => s.status === 'failed').length} item(s) could not be analyzed by Gemini. Original files remain ready to retry or save manually.`
       : undefined,
     lastUndoSnapshot: undoSnapshot,
   });
+}
+
+/**
+ * Retries saving previously failed memories using their EXACT same stable IDs
+ * to prevent duplicates on retry.
+ */
+export async function retrySaveMemoriesBatch(params: {
+  memories: Memory[];
+  userId: string;
+  sessionToken?: string | null;
+}): Promise<{
+  saved: Memory[];
+  failed: Array<{ memory: Memory; error: string }>;
+}> {
+  const saved: Memory[] = [];
+  const failed: Array<{ memory: Memory; error: string }> = [];
+
+  for (const mem of params.memories) {
+    const syncRes = await syncMemoryRecordToVault(
+      { ...mem, userId: params.userId, updatedAt: new Date().toISOString() },
+      params.userId,
+      params.sessionToken,
+    );
+    if (syncRes.ok && syncRes.synced) {
+      const serverMem = syncRes.savedMemory;
+      const updated: Memory = {
+        ...mem,
+        mediaUrl:
+          serverMem && typeof serverMem.mediaUrl === 'string'
+            ? serverMem.mediaUrl
+            : mem.mediaUrl,
+        customImageUrl:
+          serverMem && typeof serverMem.customImageUrl === 'string'
+            ? serverMem.customImageUrl
+            : mem.customImageUrl,
+      };
+      saved.push(updated);
+    } else {
+      failed.push({
+        memory: mem,
+        error: syncRes.errorMessage || 'Could not save — retry',
+      });
+    }
+  }
+
+  return { saved, failed };
 }

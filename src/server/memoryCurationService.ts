@@ -62,7 +62,41 @@ export interface CurationAnalysisResult {
   suggestedLocation?: string;
   suggestedTags?: string[];
   suggestedPeople?: string[];
+  assistantResponse?: string;
+  aiGeneratedTitle?: string;
+  aiGeneratedDescription?: string;
   report?: MemoryAnalysisReport;
+}
+
+export interface ChildhoodAssistantMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChildhoodAssistantResult {
+  ok: boolean;
+  analyzedBy: 'gemini' | 'none';
+  modelUsed?: string;
+  connectionStatus: ConnectionState;
+  code?: string;
+  httpStatus?: number;
+  retryable?: boolean;
+  message?: string;
+  reply?: string;
+  intent?: 'observe' | 'answer' | 'organize' | 'move';
+  referencedMemoryIds?: string[];
+  proposedMove?: {
+    memoryId: string;
+    memoryTitle: string;
+    targetLocationId: ChildhoodWorldLocationId;
+    targetLocationLabel: string;
+    reason: string;
+  };
+  suggestedGroups?: Array<{
+    title: string;
+    memoryIds: string[];
+    rationale: string;
+  }>;
 }
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.55;
@@ -497,13 +531,21 @@ export class MemoryCurationService {
         ? `Audio Transcript:\n"""\n${transcriptFromGemini.slice(0, 2500)}\n"""`
         : '',
       '',
-      'Available MEMORA Childhood World Locations (pick ONE valid recommendedLocationId):',
+      'Available MEMORA Childhood Room & World Locations (pick ONE valid recommendedLocationId):',
+      'Prefer the 5 core Childhood Room zones when fitting:',
+      '  - "memory_wall": important moments & milestone photos on the main Memory Wall',
+      '  - "bedroom": framed photographs & cozy portrait frames',
+      '  - "toy_box": childhood toys, games, plushies, and keepsakes',
+      '  - "bookshelf": books, comics, notebooks, and school memories',
+      '  - "study_corner": drawings, art projects, certificates, and letters on the Study Desk',
+      'Full valid location catalogue:',
       VALID_LOCATION_LIST,
       '',
       'Return ONLY a single JSON object with these exact keys:',
       '{',
       '  "suggestedTitle": string (concise, grounded, non-melodramatic title),',
       '  "suggestedDescription": string (1-2 factual archival sentences describing only what is observed),',
+      '  "assistantResponse": string (1-2 warm, natural, human sentences acknowledging this memory and where it fits in the Childhood Room — strictly grounded in visible or user-provided details with ZERO invented names, dates, relationships, or personal history),',
       '  "suggestedDate": string (explicit date/year ONLY if visible or written, otherwise ""),',
       '  "suggestedLocation": string (explicit place name ONLY if visible or written, otherwise ""),',
       '  "suggestedTags": string[] (2-6 factual keywords),',
@@ -581,17 +623,23 @@ export class MemoryCurationService {
         warnings.push(placement.correctionNote);
       }
 
+      const aiGeneratedTitle = String(parsed.suggestedTitle || '').trim().slice(0, 120);
+      const aiGeneratedDescription = String(parsed.suggestedDescription || '').trim().slice(0, 420);
       const cleanTitle =
         String(item.userTitle || '').trim().slice(0, 120) ||
-        String(parsed.suggestedTitle || '').trim().slice(0, 120) ||
+        aiGeneratedTitle ||
         fileName.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ').trim() ||
         'Uploaded Memory';
 
       const cleanDescription =
         String(item.userDescription || '').trim().slice(0, 420) ||
-        String(parsed.suggestedDescription || '').trim().slice(0, 420) ||
+        aiGeneratedDescription ||
         String(parsed.recommendedReason || '').trim().slice(0, 420) ||
         `Original ${mediaCategory} preserved in MEMORA.`;
+
+      const assistantResponse =
+        String(parsed.assistantResponse || '').trim().slice(0, 320) ||
+        `Your memory "${cleanTitle}" is ready for the ${placement.catalogEntry.label} in the Childhood Room.`;
 
       const explicitDates = asCleanStringArray(parsed.explicitDates, 6);
       const suggestedDate =
@@ -647,8 +695,9 @@ export class MemoryCurationService {
           ? `Confidence was low (${Math.round(confidenceScore * 100)}%); placed in Keepsake Corner / Unsorted until you confirm a location.`
           : String(parsed.recommendedReason || '').trim().slice(0, 260) ||
             placement.catalogEntry.experienceSummary,
+        assistantResponse,
         sensitiveReconstructionRequiresApproval: false,
-        autoPlacedIn3D: !isLowConfidence,
+        autoPlacedIn3D: true,
       };
 
       this.setStatus('connected');
@@ -665,6 +714,9 @@ export class MemoryCurationService {
         httpStatus: 200,
         suggestedTitle: cleanTitle,
         suggestedDescription: cleanDescription,
+        aiGeneratedTitle: aiGeneratedTitle || undefined,
+        aiGeneratedDescription: aiGeneratedDescription || undefined,
+        assistantResponse,
         suggestedDate,
         suggestedLocation,
         suggestedTags:
@@ -797,5 +849,260 @@ export class MemoryCurationService {
       connections,
       placements,
     };
+  }
+
+  /**
+   * Real Gemini-backed Childhood Room Memory Assistant.
+   * Strictly grounded in the user's actual saved memories — never fabricates facts,
+   * names, dates, or stories, and never returns fake hardcoded chatbot replies on error.
+   */
+  public async converseWithChildhoodMemories(params: {
+    mode: 'observe_memory' | 'chat';
+    message?: string;
+    selectedMemoryId?: string;
+    memories: Array<Record<string, unknown>>;
+    history?: ChildhoodAssistantMessage[];
+  }): Promise<ChildhoodAssistantResult> {
+    const apiKey = this.getApiKey();
+    if (!isValidGeminiApiKey(apiKey)) {
+      this.setStatus(
+        'missing_credentials',
+        'GEMINI_API_KEY is not configured on the server.',
+      );
+      return {
+        ok: false,
+        analyzedBy: 'none',
+        connectionStatus: 'missing_credentials',
+        code: 'MISSING_CREDENTIALS',
+        httpStatus: 503,
+        retryable: false,
+        message:
+          'GEMINI_API_KEY is not configured on the server. Live Childhood Room AI assistant requires a configured Gemini API key.',
+      };
+    }
+
+    const memories = Array.isArray(params.memories) ? params.memories : [];
+    const memoryById = new Map<string, Record<string, unknown>>();
+    for (const mem of memories) {
+      if (mem && typeof mem.id === 'string' && mem.id.trim()) {
+        memoryById.set(mem.id.trim(), mem);
+      }
+    }
+
+    const selectedMemory =
+      params.selectedMemoryId && memoryById.has(params.selectedMemoryId)
+        ? memoryById.get(params.selectedMemoryId)
+        : undefined;
+
+    if (params.mode === 'observe_memory' && !selectedMemory) {
+      return {
+        ok: false,
+        analyzedBy: 'none',
+        connectionStatus: this.getStatus().connectionStatus,
+        code: 'INVALID_INPUT',
+        httpStatus: 400,
+        retryable: false,
+        message: 'Selected memory was not found in your saved memories.',
+      };
+    }
+
+    const userMessage = String(params.message || '').trim().slice(0, 800);
+    if (params.mode === 'chat' && !userMessage) {
+      return {
+        ok: false,
+        analyzedBy: 'none',
+        connectionStatus: this.getStatus().connectionStatus,
+        code: 'INVALID_INPUT',
+        httpStatus: 400,
+        retryable: false,
+        message: 'Please enter a message for the Childhood Room assistant.',
+      };
+    }
+
+    const formatMemoryLine = (m: Record<string, unknown>) => {
+      const zoneId = String(m.curatedZoneId || 'memory_wall');
+      const zoneLabel =
+        CHILDHOOD_WORLD_LOCATION_CATALOGUE[zoneId as ChildhoodWorldLocationId]
+          ?.label || zoneId;
+      const tags = Array.isArray(m.tags) ? m.tags.join(', ') : '';
+      const userDesc =
+        m.userProvided && typeof m.userProvided === 'object'
+          ? String((m.userProvided as Record<string, unknown>).description || '')
+          : '';
+      return `- id="${m.id}" | title="${String(m.title || '')}" | type="${String(m.type || m.mediaType || 'image')}" | roomLocationId="${zoneId}" (${zoneLabel}) | date="${String(m.date || '')}" | place="${String(m.location || '')}" | tags=[${tags}] | description="${String(m.description || '').slice(0, 220)}"${userDesc ? ` | userNote="${userDesc.slice(0, 180)}"` : ''}`;
+    };
+
+    const memoryRoster =
+      memories.length > 0
+        ? memories.slice(0, 40).map(formatMemoryLine).join('\n')
+        : '(No saved memories in the Childhood Room yet.)';
+
+    const recentHistory = Array.isArray(params.history)
+      ? params.history
+          .slice(-6)
+          .map(
+            (h) =>
+              `${h.role === 'user' ? 'Visitor' : 'Assistant'}: ${String(h.content || '').slice(0, 260)}`,
+          )
+          .join('\n')
+      : '';
+
+    const prompt = [
+      'You are the Childhood Room AI Memory Assistant inside MEMORA.',
+      'STRICT GROUNDING RULES:',
+      '1. Use ONLY the saved memory records listed below. NEVER invent names, dates, places, relationships, or stories that are not explicitly saved in the records.',
+      '2. If a user asks about something not saved in their memories, say honestly what is and is not recorded.',
+      '3. Be warm, concise, and natural (1-3 sentences in "reply").',
+      '4. If the user asks to MOVE a memory to another Childhood Room location (e.g., Memory Wall, Photo Frames/Bedroom, Toy Box, Bookshelf, Study Desk, Treehouse, Backyard, etc.), identify the exact saved memoryId and set "proposedMove" using one of the valid location IDs below.',
+      '5. If the user asks to ORGANIZE or group their memories, return "suggestedGroups" using ONLY existing saved memory IDs.',
+      '',
+      'Valid Childhood Room location IDs:',
+      VALID_LOCATION_LIST,
+      '',
+      'Saved Childhood Room Memories:',
+      memoryRoster,
+      '',
+      selectedMemory
+        ? `Currently Selected Memory:\n${formatMemoryLine(selectedMemory)}`
+        : '',
+      recentHistory ? `Recent Conversation:\n${recentHistory}` : '',
+      '',
+      params.mode === 'observe_memory'
+        ? 'Task: Provide a brief, warm, grounded observation (1-2 sentences) about the Currently Selected Memory based strictly on its saved details and where it sits in the Childhood Room.'
+        : `Visitor Message: "${userMessage}"`,
+      '',
+      'Return ONLY a single JSON object with these exact keys:',
+      '{',
+      '  "reply": string (1-3 warm, grounded sentences),',
+      '  "intent": "observe" | "answer" | "organize" | "move",',
+      '  "referencedMemoryIds": string[] (only exact IDs from Saved Childhood Room Memories),',
+      '  "proposedMove": null | { "memoryId": string, "targetLocationId": string, "reason": string },',
+      '  "suggestedGroups": null | [{ "title": string, "memoryIds": string[], "rationale": string }]',
+      '}',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      const rawText = await this.runModelWithTimeout({
+        apiKey,
+        model: GEMINI_MODELS.curation,
+        parts: [{ text: prompt }],
+        responseMimeType: 'application/json',
+      });
+
+      if (!rawText) {
+        const emptyErr: any = new Error(
+          'Gemini returned an empty response for Childhood Room assistant.',
+        );
+        emptyErr.code = 'INVALID_AI_RESPONSE';
+        throw emptyErr;
+      }
+
+      const parsed = parseAndValidateJson<Record<string, any>>(rawText, [
+        'reply',
+      ]);
+
+      const reply = String(parsed.reply || '').trim().slice(0, 650);
+      const validReferencedIds = Array.isArray(parsed.referencedMemoryIds)
+        ? parsed.referencedMemoryIds
+            .map((id: unknown) => String(id || '').trim())
+            .filter((id: string) => memoryById.has(id))
+        : [];
+
+      let proposedMove: ChildhoodAssistantResult['proposedMove'];
+      if (parsed.proposedMove && typeof parsed.proposedMove === 'object') {
+        const moveMemId = String(parsed.proposedMove.memoryId || '').trim();
+        const rawTargetLoc = String(
+          parsed.proposedMove.targetLocationId || '',
+        ).trim();
+        const targetMem = memoryById.get(moveMemId);
+        if (targetMem && rawTargetLoc) {
+          const mediaType = String(
+            targetMem.type || targetMem.mediaType || 'image',
+          ) as any;
+          const validated = validateLocationPlacement(rawTargetLoc, mediaType);
+          proposedMove = {
+            memoryId: moveMemId,
+            memoryTitle: String(targetMem.title || 'Memory'),
+            targetLocationId: validated.locationId,
+            targetLocationLabel: validated.catalogEntry.label,
+            reason:
+              String(parsed.proposedMove.reason || '').trim().slice(0, 220) ||
+              `Moved to ${validated.catalogEntry.label}.`,
+          };
+        }
+      }
+
+      let suggestedGroups: ChildhoodAssistantResult['suggestedGroups'];
+      if (Array.isArray(parsed.suggestedGroups)) {
+        const cleanedGroups = parsed.suggestedGroups
+          .map((g: any) => {
+            if (!g || typeof g !== 'object') return null;
+            const ids = Array.isArray(g.memoryIds)
+              ? Array.from(
+                  new Set(
+                    g.memoryIds
+                      .map((id: unknown) => String(id || '').trim())
+                      .filter((id: string) => memoryById.has(id)),
+                  ),
+                )
+              : [];
+            if (ids.length === 0) return null;
+            return {
+              title: String(g.title || 'Memory Group').trim().slice(0, 80),
+              memoryIds: ids as string[],
+              rationale: String(g.rationale || '').trim().slice(0, 220),
+            };
+          })
+          .filter(Boolean) as NonNullable<
+          ChildhoodAssistantResult['suggestedGroups']
+        >;
+        if (cleanedGroups.length > 0) {
+          suggestedGroups = cleanedGroups;
+        }
+      }
+
+      const rawIntent = String(parsed.intent || '').trim();
+      const intent: ChildhoodAssistantResult['intent'] =
+        params.mode === 'observe_memory'
+          ? 'observe'
+          : proposedMove
+            ? 'move'
+            : suggestedGroups && suggestedGroups.length > 0
+              ? 'organize'
+              : rawIntent === 'move' ||
+                  rawIntent === 'organize' ||
+                  rawIntent === 'observe'
+                ? rawIntent
+                : 'answer';
+
+      this.setStatus('connected');
+
+      return {
+        ok: true,
+        analyzedBy: 'gemini',
+        modelUsed: GEMINI_MODELS.curation,
+        connectionStatus: 'connected',
+        httpStatus: 200,
+        reply: reply || 'I reviewed your saved Childhood Room memories.',
+        intent,
+        referencedMemoryIds: validReferencedIds,
+        proposedMove,
+        suggestedGroups,
+      };
+    } catch (err: unknown) {
+      const classified = classifyGeminiError(err);
+      this.setStatus(classified.connectionStatus, classified.message);
+      return {
+        ok: false,
+        analyzedBy: 'none',
+        connectionStatus: classified.connectionStatus,
+        code: classified.code,
+        httpStatus: classified.httpStatus,
+        retryable: classified.retryable,
+        message: classified.message,
+      };
+    }
   }
 }

@@ -8,6 +8,12 @@ export interface VaultMediaAsset {
   urlOrRef?: string;
 }
 
+export interface VaultStoredMediaFile {
+  relativePath: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 export interface VaultMemoryRecord {
   id: string;
   userId: string;
@@ -18,6 +24,8 @@ export interface VaultMemoryRecord {
   mediaType?: string;
   mediaMimeType?: string;
   mediaUrl?: string;
+  customImageUrl?: string;
+  storedMediaFile?: VaultStoredMediaFile;
   mediaAssets?: VaultMediaAsset[];
   updatedAt: string;
   [key: string]: unknown;
@@ -107,15 +115,76 @@ function parseTimestamp(iso: unknown): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+const ALLOWED_PERSISTED_MEDIA_MIMES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/wav': 'wav',
+  'audio/ogg': 'ogg',
+  'application/pdf': 'pdf',
+  'text/plain': 'txt',
+};
+
+const MAX_PERSISTED_MEDIA_BYTES = 15 * 1024 * 1024; // 15 MB
+
+function sanitizePathSegment(raw: string): string {
+  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^\.+/, '');
+  return cleaned.slice(0, 96) || 'item';
+}
+
+function parseDataUrlPayload(
+  uri: string | undefined,
+): { mimeType: string; buffer: Buffer; ext: string } | null {
+  if (!uri || typeof uri !== 'string' || !uri.startsWith('data:')) return null;
+  const commaIdx = uri.indexOf(',');
+  if (commaIdx === -1) return null;
+  const header = uri.slice(5, commaIdx).toLowerCase();
+  const base64Part = uri.slice(commaIdx + 1);
+  if (!header.includes(';base64')) return null;
+  const mimeType = header.split(';')[0].trim();
+  const ext = ALLOWED_PERSISTED_MEDIA_MIMES[mimeType];
+  if (!ext) return null;
+  const buffer = Buffer.from(base64Part, 'base64');
+  if (buffer.length === 0 || buffer.length > MAX_PERSISTED_MEDIA_BYTES) {
+    return null;
+  }
+  return { mimeType, buffer, ext };
+}
+
 export class MemoryVaultService {
   private readonly vaultPath: string;
+  private readonly mediaRootDir: string;
   private data: VaultDiskData = { users: {}, curation: {} };
 
   constructor(vaultFilePath?: string) {
+    const projectDefaultPath = path.resolve(
+      process.cwd(),
+      'data',
+      'memora-memory-vault.json',
+    );
     this.vaultPath =
-      vaultFilePath ||
-      process.env.MEMORA_VAULT_PATH ||
-      path.join(os.tmpdir(), 'memora-memory-vault.json');
+      vaultFilePath || process.env.MEMORA_VAULT_PATH || projectDefaultPath;
+    this.mediaRootDir = path.resolve(path.dirname(this.vaultPath), 'media');
+
+    // Seamlessly migrate legacy os.tmpdir() vault if project vault doesn't exist yet
+    if (!vaultFilePath && !process.env.MEMORA_VAULT_PATH && !fs.existsSync(this.vaultPath)) {
+      const legacyPath = path.join(os.tmpdir(), 'memora-memory-vault.json');
+      if (fs.existsSync(legacyPath)) {
+        try {
+          fs.mkdirSync(path.dirname(this.vaultPath), { recursive: true });
+          fs.copyFileSync(legacyPath, this.vaultPath);
+        } catch {
+          // ignore migration error and proceed cleanly
+        }
+      }
+    }
+
     this.loadFromDisk();
   }
 
@@ -139,7 +208,7 @@ export class MemoryVaultService {
     }
   }
 
-  private persistToDisk(): void {
+  private persistToDisk(): boolean {
     try {
       const dir = path.dirname(this.vaultPath);
       if (!fs.existsSync(dir)) {
@@ -148,9 +217,96 @@ export class MemoryVaultService {
       const tmpPath = `${this.vaultPath}.${process.pid}.${Date.now()}.tmp`;
       fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf8');
       fs.renameSync(tmpPath, this.vaultPath);
+      return true;
     } catch {
-      // keep in-memory state working
+      return false;
     }
+  }
+
+  private persistInlineMediaToDisk(
+    userId: string,
+    memoryId: string,
+    dataUri: string,
+  ): VaultStoredMediaFile | null {
+    const parsed = parseDataUrlPayload(dataUri);
+    if (!parsed) return null;
+
+    const userDirName = sanitizePathSegment(userId);
+    const fileName = `${sanitizePathSegment(memoryId)}.${parsed.ext}`;
+    const relativePath = path.join(userDirName, fileName);
+    const resolvedTarget = path.resolve(this.mediaRootDir, relativePath);
+    const rootPrefix = this.mediaRootDir.endsWith(path.sep)
+      ? this.mediaRootDir
+      : `${this.mediaRootDir}${path.sep}`;
+
+    // Strict path confinement check
+    if (!resolvedTarget.startsWith(rootPrefix)) {
+      return null;
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(resolvedTarget), { recursive: true });
+      const tmpPath = `${resolvedTarget}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmpPath, parsed.buffer);
+      fs.renameSync(tmpPath, resolvedTarget);
+      return {
+        relativePath,
+        mimeType: parsed.mimeType,
+        sizeBytes: parsed.buffer.length,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private removeStoredMediaFile(stored?: VaultStoredMediaFile): void {
+    if (!stored?.relativePath) return;
+    const resolvedTarget = path.resolve(this.mediaRootDir, stored.relativePath);
+    const rootPrefix = this.mediaRootDir.endsWith(path.sep)
+      ? this.mediaRootDir
+      : `${this.mediaRootDir}${path.sep}`;
+    if (!resolvedTarget.startsWith(rootPrefix)) return;
+    try {
+      if (fs.existsSync(resolvedTarget)) {
+        fs.unlinkSync(resolvedTarget);
+      }
+    } catch {
+      // ignore cleanup error
+    }
+  }
+
+  public readUserMediaFile(
+    userId: string,
+    memoryId: string,
+  ):
+    | { ok: true; filePath: string; mimeType: string }
+    | { ok: false; code: string; status: number } {
+    if (!isValidPrivateUserId(userId)) {
+      return { ok: false, code: 'UNAUTHORIZED', status: 401 };
+    }
+    const record = this.getUserMemory(userId, memoryId);
+    if (!record) {
+      return { ok: false, code: 'NOT_FOUND', status: 404 };
+    }
+    const stored = record.storedMediaFile;
+    if (!stored?.relativePath) {
+      return { ok: false, code: 'MEDIA_NOT_FOUND', status: 404 };
+    }
+    const resolvedTarget = path.resolve(this.mediaRootDir, stored.relativePath);
+    const rootPrefix = this.mediaRootDir.endsWith(path.sep)
+      ? this.mediaRootDir
+      : `${this.mediaRootDir}${path.sep}`;
+    if (!resolvedTarget.startsWith(rootPrefix)) {
+      return { ok: false, code: 'INVALID_PATH', status: 403 };
+    }
+    if (!fs.existsSync(resolvedTarget)) {
+      return { ok: false, code: 'MEDIA_FILE_MISSING', status: 404 };
+    }
+    return {
+      ok: true,
+      filePath: resolvedTarget,
+      mimeType: stored.mimeType || 'application/octet-stream',
+    };
   }
 
   private validateAndNormalizeRecord(
@@ -197,18 +353,62 @@ export class MemoryVaultService {
       };
     }
 
-    const safeMediaUrl = sanitizeMediaUri(obj.mediaUrl);
+    const existingRecord = this.data.users[userId]?.[id];
+    let safeMediaUrl = sanitizeMediaUri(obj.mediaUrl);
+    let safeCustomImageUrl = sanitizeMediaUri(obj.customImageUrl);
+    let storedMediaFile: VaultStoredMediaFile | undefined =
+      existingRecord?.storedMediaFile;
+
+    // Persist inline uploaded image/media binary onto project disk under data/media/<userId>/<memoryId>.<ext>
+    const inlineCandidate =
+      (safeCustomImageUrl && safeCustomImageUrl.startsWith('data:')
+        ? safeCustomImageUrl
+        : undefined) ||
+      (safeMediaUrl && safeMediaUrl.startsWith('data:') ? safeMediaUrl : undefined);
+
+    if (inlineCandidate) {
+      const savedFile = this.persistInlineMediaToDisk(userId, id, inlineCandidate);
+      if (savedFile) {
+        storedMediaFile = savedFile;
+        const durableUrl = `/api/storage/media/${encodeURIComponent(id)}`;
+        safeMediaUrl = durableUrl;
+        if (savedFile.mimeType.startsWith('image/')) {
+          safeCustomImageUrl = durableUrl;
+        }
+      }
+    } else if (storedMediaFile) {
+      // Preserve durable server media URL on metadata-only edits
+      const durableUrl = `/api/storage/media/${encodeURIComponent(id)}`;
+      if (!safeMediaUrl || safeMediaUrl.startsWith('idb://')) {
+        safeMediaUrl = durableUrl;
+      }
+      if (
+        storedMediaFile.mimeType.startsWith('image/') &&
+        (!safeCustomImageUrl || safeCustomImageUrl.startsWith('idb://'))
+      ) {
+        safeCustomImageUrl = durableUrl;
+      }
+    }
+
     const assetCategory = classifyAssetCategory(obj);
     const existingAssets = Array.isArray(obj.mediaAssets)
       ? (obj.mediaAssets as VaultMediaAsset[])
       : [];
     const mediaAssets: VaultMediaAsset[] =
       existingAssets.length > 0
-        ? existingAssets
+        ? existingAssets.map((asset, idx) =>
+            idx === 0 && storedMediaFile
+              ? {
+                  ...asset,
+                  mimeType: storedMediaFile.mimeType || asset.mimeType,
+                  urlOrRef: safeMediaUrl || asset.urlOrRef,
+                }
+              : asset,
+          )
         : [
             {
               assetCategory,
-              mimeType: mime || undefined,
+              mimeType: storedMediaFile?.mimeType || mime || undefined,
               urlOrRef: safeMediaUrl,
             },
           ];
@@ -221,7 +421,10 @@ export class MemoryVaultService {
       roomId: roomId || 'childhood',
       title,
       type: typeof obj.type === 'string' && obj.type ? obj.type : 'image',
+      mediaMimeType: storedMediaFile?.mimeType || mime || (obj.mediaMimeType as string | undefined),
       mediaUrl: safeMediaUrl,
+      customImageUrl: safeCustomImageUrl,
+      storedMediaFile,
       mediaAssets,
       updatedAt:
         typeof obj.updatedAt === 'string' && obj.updatedAt
@@ -310,7 +513,17 @@ export class MemoryVaultService {
       savedRecords.push(rec);
     }
 
-    this.persistToDisk();
+    const persisted = this.persistToDisk();
+    if (!persisted) {
+      return {
+        ok: false,
+        code: 'DISK_PERSIST_FAILED',
+        errors: ['Could not write memory vault to project disk.'],
+        savedCount: 0,
+        totalCount: Object.keys(bucket).length,
+        savedRecords: [],
+      };
+    }
 
     return {
       ok: true,
@@ -450,7 +663,9 @@ export class MemoryVaultService {
     if (!bucket || !bucket[memoryId]) {
       return { deleted: false, totalCount: bucket ? Object.keys(bucket).length : 0 };
     }
+    const existing = bucket[memoryId];
     delete bucket[memoryId];
+    this.removeStoredMediaFile(existing?.storedMediaFile);
     this.persistToDisk();
     return { deleted: true, totalCount: Object.keys(bucket).length };
   }
@@ -514,11 +729,13 @@ export class MemoryVaultService {
 
   public getDiagnostics(userId?: string): {
     vaultPath: string;
+    mediaRootDir: string;
     userMemoryCount: number;
     totalUsersTracked: number;
   } {
     return {
       vaultPath: this.vaultPath,
+      mediaRootDir: this.mediaRootDir,
       userMemoryCount: userId ? this.listUserMemories(userId).length : 0,
       totalUsersTracked: Object.keys(this.data.users).length,
     };
